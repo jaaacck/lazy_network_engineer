@@ -1,0 +1,1458 @@
+{% load static %}
+{% load version_tags %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Lazy Network Engineer{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'pm/css/style.css' %}">
+    <link rel="stylesheet" href="{% static 'pm/css/easymde.min.css' %}">
+    <script src="{% static 'pm/js/easymde.min.js' %}"></script>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <span class="logo"><a href="{% url 'project_list' %}">LNE</a></span>
+            <nav class="nav">
+                <a href="{% url 'project_list' %}">projects</a>
+                <a href="{% url 'inbox' %}">inbox</a>
+                <a href="{% url 'my_work' %}">my work</a>
+                <a href="{% url 'today' %}">today</a>
+                <a href="{% url 'calendar' %}">calendar</a>
+                <span class="nav-spacer"></span>
+                <a href="{% url 'notes_list' %}">notes</a>
+                <span class="nav-spacer"></span>
+                <a href="{% url 'people_list' %}">people</a>
+            </nav>
+            <form class="nav-search" action="{% url 'search' %}" method="get">
+                <input type="text" name="q" placeholder="Search..." value="{{ request.GET.q|default:'' }}">
+            </form>
+            <div class="toolbox-dropdown">
+                <button class="toolbox-toggle" id="toolbox-toggle">Toolbox</button>
+                <div class="toolbox-menu" id="toolbox-menu">
+                    <a href="#" class="toolbox-item" id="subnet-calculator-link">Subnet Calculator</a>
+                    <a href="#" class="toolbox-item" id="whois-link">Whois</a>
+                    <a href="#" class="toolbox-item" id="dig-dns-link">Dig DNS</a>
+                    <a href="#" class="toolbox-item" id="mac-lookup-link">MAC Lookup</a>
+                    <a href="#" class="toolbox-item">BGP Looking Glass</a>
+                </div>
+            </div>
+            <button class="nav-quick-add" id="quick-add-button">Quick Add</button>
+            <a href="#" class="nav-help" id="help-button">Help</a>
+        </div>
+    </div>
+
+    <!-- Quick Add Modal -->
+    <div class="help-modal" id="quick-add-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>Quick Add</h3>
+                <button class="help-modal-close" id="quick-add-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <div class="quick-add-tabs">
+                    <button class="quick-add-tab" data-tab="note">Note</button>
+                    <button class="quick-add-tab active" data-tab="task">Task</button>
+                </div>
+                
+                <!-- Note Form -->
+                <form id="quick-add-note-form" class="quick-add-form" style="display: none;">
+                    <div class="form-group">
+                        <label for="quick-note-title">Title</label>
+                        <input type="text" name="title" id="quick-note-title" placeholder="Note title" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-note-content">Content</label>
+                        <textarea name="content" id="quick-note-content" placeholder="Note content (markdown)" rows="5"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-note-labels">Labels (comma-separated)</label>
+                        <input type="text" name="labels" id="quick-note-labels" placeholder="label1, label2">
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-note-people">People (comma-separated)</label>
+                        <input type="text" name="people" id="quick-note-people" placeholder="@person1, @person2">
+                    </div>
+                    <input type="hidden" name="item_type" value="note">
+                    <div class="form-actions">
+                        <button type="submit">Create Note</button>
+                    </div>
+                </form>
+                
+                <!-- Task Form -->
+                <form id="quick-add-task-form" class="quick-add-form" style="display: block;">
+                    <div class="form-group">
+                        <label for="quick-task-title">Title</label>
+                        <input type="text" name="title" id="quick-task-title" placeholder="Task title" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-project">Project</label>
+                        <select name="project_id" id="quick-task-project">
+                            <option value="project-inbox" selected>Inbox</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-priority">Priority</label>
+                        <select name="priority" id="quick-task-priority">
+                            <option value="3" selected>P3</option>
+                            <option value="1">P1</option>
+                            <option value="2">P2</option>
+                            <option value="4">P4</option>
+                            <option value="5">P5</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-status">Status</label>
+                        <select name="status" id="quick-task-status">
+                            <option value="todo" selected>todo</option>
+                            <option value="in_progress">in progress</option>
+                            <option value="done">done</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-due">Due Date</label>
+                        <input type="datetime-local" name="due_date" id="quick-task-due">
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-labels">Labels (comma-separated)</label>
+                        <input type="text" name="labels" id="quick-task-labels" placeholder="label1, label2">
+                    </div>
+                    <div class="form-group">
+                        <label for="quick-task-content">Description</label>
+                        <textarea name="content" id="quick-task-content" placeholder="Task description (markdown)" rows="3"></textarea>
+                    </div>
+                    <input type="hidden" name="item_type" value="task">
+                    <div class="form-actions">
+                        <button type="submit">Create Task</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div class="help-modal" id="help-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>Lazy Network Engineer</h3>
+                <button class="help-modal-close" id="help-modal-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <p>A hierarchical project management system for network engineers.</p>
+                
+                <h4>Version Information</h4>
+                <ul class="help-list">
+                    <li><strong>Application:</strong> Lazy Network Engineer v{% app_version %}</li>
+                    <li><strong>Django:</strong> {% django_version %}</li>
+                    <li><strong>Python:</strong> {% python_version %}</li>
+                </ul>
+                <p style="margin-top: 12px; margin-bottom: 0;">
+                    <a href="#" id="changelog-link" style="color: #ff6600; text-decoration: underline; cursor: pointer;">View Changelog</a>
+                </p>
+                
+                <div id="changelog-content" style="display: none; margin-top: 16px; padding: 12px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 3px; max-height: 400px; overflow-y: auto;">
+                    <h4 style="margin-top: 0; margin-bottom: 12px; color: #ff6600;">Changelog</h4>
+                    <div id="changelog-text" style="font-size: 9pt; line-height: 1.6; color: #333;"></div>
+                </div>
+                
+                <h4>Keyboard Shortcuts</h4>
+                <ul class="help-list">
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>N</kbd> - New project</li>
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>S</kbd> - Focus search</li>
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>M</kbd> - My work</li>
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>T</kbd> - Today</li>
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>C</kbd> - Calendar</li>
+                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>E</kbd> - Toggle edit mode</li>
+                    <li><kbd>Alt</kbd> + <kbd>S</kbd> (in input) - Save form</li>
+                    <li><kbd>Esc</kbd> - Cancel/Go back</li>
+                </ul>
+                
+                <h4>Features</h4>
+                <ul class="help-list">
+                    <li>Hierarchical project structure (Projects → Epics → Tasks → Subtasks)</li>
+                    <li>Markdown-based content with YAML frontmatter</li>
+                    <li>Activity logging and updates</li>
+                    <li>Priority and status tracking</li>
+                    <li>Due dates and scheduling</li>
+                    <li>Labels and people tagging</li>
+                    <li>Dependencies and relationships</li>
+                    <li>Global search</li>
+                    <li>Calendar view</li>
+                    <li>Notes and scratchpad</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subnet Calculator Modal -->
+    <div class="help-modal" id="subnet-calculator-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>Subnet Calculator</h3>
+                <button class="help-modal-close" id="subnet-calculator-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <div class="subnet-input-section">
+                    <label for="subnet-input">Enter IP Address (IPv4 or IPv6) with Subnet Mask or CIDR:</label>
+                    <input type="text" id="subnet-input" placeholder="e.g., 192.168.1.1/24 or 192.168.1.1 255.255.255.0 or 2001:db8::1/64" class="tool-input">
+                    <button id="subnet-calculate-btn" class="tool-button">Calculate</button>
+                </div>
+                <div id="subnet-results" class="tool-results">
+                    <h4>Results</h4>
+                    <div class="subnet-results-grid">
+                        <div class="subnet-result-item">
+                            <strong>IP Address Entered:</strong>
+                            <span id="result-ip"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Netmask:</strong>
+                            <span id="result-netmask"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Wildcard Mask:</strong>
+                            <span id="result-wildcard"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>CIDR Notation:</strong>
+                            <span id="result-cidr"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Network Address:</strong>
+                            <span id="result-network"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Network Broadcast:</strong>
+                            <span id="result-broadcast"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Usable Network Range:</strong>
+                            <span id="result-range"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Binary Network:</strong>
+                            <span id="result-binary"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Total Number of Hosts:</strong>
+                            <span id="result-total-hosts"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>Total Usable Hosts:</strong>
+                            <span id="result-usable-hosts"></span>
+                        </div>
+                        <div class="subnet-result-item">
+                            <strong>IP Class:</strong>
+                            <span id="result-class"></span>
+                        </div>
+                    </div>
+                </div>
+                <div id="subnet-error" class="tool-error"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Whois Modal -->
+    <div class="help-modal" id="whois-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>Whois Lookup</h3>
+                <button class="help-modal-close" id="whois-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <div class="subnet-input-section">
+                    <label for="whois-input">Enter domain name or IP address:</label>
+                    <input type="text" id="whois-input" placeholder="e.g., example.com or 192.168.1.1" class="tool-input">
+                    <button id="whois-query-btn" class="tool-button">Query</button>
+                </div>
+                <div id="whois-results" class="tool-results">
+                    <h4>Results</h4>
+                    <pre id="whois-output" class="tool-output"></pre>
+                </div>
+                <div id="whois-error" class="tool-error"></div>
+                <div id="whois-loading" class="tool-loading">Querying whois database...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dig DNS Modal -->
+    <div class="help-modal" id="dig-dns-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>Dig DNS Lookup</h3>
+                <button class="help-modal-close" id="dig-dns-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <div class="subnet-input-section">
+                    <label for="dig-input">Enter domain name or IP address:</label>
+                    <input type="text" id="dig-input" placeholder="e.g., example.com or 8.8.8.8" class="tool-input">
+                    <div class="tool-form-row">
+                        <label for="dig-type">Query Type:</label>
+                        <select id="dig-type" class="tool-select">
+                            <option value="">A (default)</option>
+                            <option value="A">A</option>
+                            <option value="AAAA">AAAA</option>
+                            <option value="MX">MX</option>
+                            <option value="NS">NS</option>
+                            <option value="TXT">TXT</option>
+                            <option value="CNAME">CNAME</option>
+                            <option value="SOA">SOA</option>
+                            <option value="PTR">PTR</option>
+                            <option value="ANY">ANY</option>
+                        </select>
+                        <label for="dig-server">Server (optional):</label>
+                        <input type="text" id="dig-server" placeholder="e.g., 8.8.8.8" class="tool-input-small">
+                    </div>
+                    <button id="dig-query-btn" class="tool-button">Query</button>
+                </div>
+                <div id="dig-results" class="tool-results">
+                    <h4>Results</h4>
+                    <pre id="dig-output" class="tool-output"></pre>
+                </div>
+                <div id="dig-error" class="tool-error"></div>
+                <div id="dig-loading" class="tool-loading">Querying DNS...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAC Lookup Modal -->
+    <div class="help-modal" id="mac-lookup-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>MAC Address Lookup</h3>
+                <button class="help-modal-close" id="mac-lookup-close">&times;</button>
+            </div>
+            <div class="help-content">
+                <div class="subnet-input-section">
+                    <label for="mac-input">Enter MAC Address:</label>
+                    <input type="text" id="mac-input" placeholder="e.g., FC-A1-3E-2A-1C-33 or FC:A1:3E:2A:1C:33 or fca13e2a1c33" class="tool-input">
+                    <button id="mac-query-btn" class="tool-button">Lookup</button>
+                </div>
+                <div id="mac-results" class="tool-results">
+                    <h4>Results</h4>
+                    <div class="subnet-result-item">
+                        <strong>MAC Address:</strong>
+                        <span id="mac-address-display"></span>
+                    </div>
+                    <div class="subnet-result-item">
+                        <strong>Vendor:</strong>
+                        <span id="mac-vendor"></span>
+                    </div>
+                </div>
+                <div id="mac-error" class="tool-error"></div>
+                <div id="mac-loading" class="tool-loading">Looking up MAC address...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="main">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+        // Global keyboard shortcuts handler
+        document.addEventListener('keydown', function(e) {
+            var tag = (e.target && e.target.tagName || '').toLowerCase();
+            var isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+            var isContentEditable = e.target && e.target.isContentEditable;
+            
+            // Check if any modal is open
+            var helpModal = document.getElementById('help-modal');
+            var subnetModal = document.getElementById('subnet-calculator-modal');
+            var whoisModal = document.getElementById('whois-modal');
+            var digModal = document.getElementById('dig-dns-modal');
+            var macModal = document.getElementById('mac-lookup-modal');
+            var anyModalOpen = (helpModal && helpModal.classList.contains('show')) ||
+                              (subnetModal && subnetModal.classList.contains('show')) ||
+                              (whoisModal && whoisModal.classList.contains('show')) ||
+                              (digModal && digModal.classList.contains('show')) ||
+                              (macModal && macModal.classList.contains('show'));
+            
+            // Esc key - close modals first, then handle other Esc actions
+            if (e.key === 'Escape') {
+                if (anyModalOpen) {
+                    // Let the modal handlers close the modals
+                    return;
+                }
+                if (!isInput && !isContentEditable) {
+                    var editLink = document.querySelector('a[href*="?edit=true"]');
+                    var cancelLink = document.querySelector('a.button-secondary, a[href*="Cancel"]');
+                    if (editLink) {
+                        // Exit edit mode
+                        var viewLink = editLink.previousElementSibling || editLink.parentElement.querySelector('a:not([href*="edit"])');
+                        if (viewLink) {
+                            window.location.href = viewLink.href;
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }
+                    } else if (cancelLink) {
+                        cancelLink.click();
+                        e.preventDefault();
+                        e.stopPropagation();
+                    } else {
+                        window.history.back();
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+                }
+                return;
+            }
+            
+            // Get the key (handle both key and keyCode for compatibility)
+            var key = e.key ? e.key.toLowerCase() : (e.keyCode ? String.fromCharCode(e.keyCode).toLowerCase() : '');
+            
+            // Support both Alt (Windows/Linux) and Cmd (Mac) - use Alt as primary, Cmd as fallback
+            // On Mac, Alt is Option key, Cmd is Command key
+            // We'll support both for cross-platform compatibility
+            var isModifierPressed = e.altKey || e.metaKey;
+            
+            // Alt+S (or Cmd+S) to save when in input/textarea
+            // Only use Alt+S to avoid conflicting with browser Cmd+S save dialog
+            if (isInput && e.altKey && key === 's') {
+                var form = e.target.closest('form');
+                if (form) {
+                    form.submit();
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+            
+            // Only process Alt+key (or Cmd+key on Mac) shortcuts when not in input fields and no modal is open
+            if (!isModifierPressed || isInput || isContentEditable || anyModalOpen || !key) {
+                return;
+            }
+            
+            // Prevent default browser behavior for modifier+key combinations
+            // This prevents browser shortcuts from interfering
+            e.preventDefault();
+            e.stopPropagation();
+
+            switch (key) {
+                case 'n':
+                    window.location.href = "{% url 'new_project' %}";
+                    return false;
+                case 's':
+                    // Focus the search input
+                    var searchInput = document.querySelector('.nav-search input');
+                    if (searchInput) {
+                        searchInput.focus();
+                        searchInput.select();
+                    }
+                    return false;
+                case 'm':
+                    window.location.href = "{% url 'my_work' %}";
+                    return false;
+                case 't':
+                    window.location.href = "{% url 'today' %}";
+                    return false;
+                case 'c':
+                    window.location.href = "{% url 'calendar' %}";
+                    return false;
+                case 'e':
+                    // Toggle edit mode
+                    var editLink = document.querySelector('a[href*="?edit=true"]');
+                    var viewLink = document.querySelector('a[href*="project"]:not([href*="edit"]):not([href*="new"])');
+                    if (editLink && !editLink.classList.contains('active')) {
+                        window.location.href = editLink.href;
+                    } else if (viewLink && window.location.search.includes('edit=true')) {
+                        window.location.href = viewLink.href;
+                    }
+                    return false;
+            }
+        }, true); // Use capture phase to ensure we get the event first
+
+        // Toolbox dropdown toggle
+        var toolboxToggle = document.getElementById('toolbox-toggle');
+        var toolboxMenu = document.getElementById('toolbox-menu');
+        
+        if (toolboxToggle && toolboxMenu) {
+            toolboxToggle.addEventListener('click', function(e) {
+                e.stopPropagation();
+                // Close help menu if open
+                var helpMenu = document.getElementById('help-menu');
+                if (helpMenu) helpMenu.classList.remove('show');
+                toolboxMenu.classList.toggle('show');
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!toolboxToggle.contains(e.target) && !toolboxMenu.contains(e.target)) {
+                    toolboxMenu.classList.remove('show');
+                }
+            });
+        }
+
+        // Help modal toggle
+        var helpButton = document.getElementById('help-button');
+        var helpModal = document.getElementById('help-modal');
+        var helpModalClose = document.getElementById('help-modal-close');
+        
+        if (helpButton && helpModal) {
+            helpButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                helpModal.classList.add('show');
+            });
+            
+            if (helpModalClose) {
+                helpModalClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    helpModal.classList.remove('show');
+                });
+            }
+            
+            // Close modal when clicking outside
+            helpModal.addEventListener('click', function(e) {
+                if (e.target === helpModal) {
+                    helpModal.classList.remove('show');
+                }
+            });
+            
+            // Changelog toggle
+            var changelogLink = document.getElementById('changelog-link');
+            var changelogContent = document.getElementById('changelog-content');
+            var changelogText = document.getElementById('changelog-text');
+            
+            if (changelogLink && changelogContent && changelogText) {
+                var changelogLoaded = false;
+                
+                changelogLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    if (changelogContent.style.display === 'none' || changelogContent.style.display === '') {
+                        changelogContent.style.display = 'block';
+                        changelogLink.textContent = 'Hide Changelog';
+                        
+                        // Load changelog content only once
+                        if (!changelogLoaded) {
+                            fetch('{% static "CHANGELOG.md" %}')
+                                .then(function(response) {
+                                    if (response.ok) {
+                                        return response.text();
+                                    }
+                                    throw new Error('Failed to load changelog');
+                                })
+                                .then(function(text) {
+                                    // Convert markdown to HTML (simple conversion)
+                                    var html = text
+                                        .replace(/^# (.+)$/gm, '<h5 style="margin-top: 16px; margin-bottom: 8px; color: #ff6600; font-size: 11pt;">$1</h5>')
+                                        .replace(/^## (.+)$/gm, '<h6 style="margin-top: 12px; margin-bottom: 6px; font-weight: bold; font-size: 10pt;">$1</h6>')
+                                        .replace(/^### (.+)$/gm, '<strong style="display: block; margin-top: 8px; margin-bottom: 4px; font-size: 9pt;">$1</strong>')
+                                        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                                        .replace(/^- (.+)$/gm, '<li style="margin-bottom: 4px;">$1</li>')
+                                        .replace(/(<li[^>]*>.*?<\/li>)/gs, function(match) {
+                                            return '<ul style="margin: 8px 0 12px 0; padding-left: 20px;">' + match + '</ul>';
+                                        })
+                                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #ff6600; text-decoration: underline;">$1</a>')
+                                        .replace(/\n\n/g, '</p><p style="margin: 8px 0;">')
+                                        .replace(/^/, '<p style="margin: 0;">')
+                                        .replace(/$/, '</p>');
+                                    changelogText.innerHTML = html;
+                                    changelogLoaded = true;
+                                })
+                                .catch(function(error) {
+                                    changelogText.innerHTML = '<p style="color: #828282;">Changelog not available.</p>';
+                                });
+                        }
+                    } else {
+                        changelogContent.style.display = 'none';
+                        changelogLink.textContent = 'View Changelog';
+                    }
+                });
+            }
+            
+        }
+        
+
+        // Subnet Calculator Modal
+        var subnetCalculatorLink = document.getElementById('subnet-calculator-link');
+        var subnetCalculatorModal = document.getElementById('subnet-calculator-modal');
+        var subnetCalculatorClose = document.getElementById('subnet-calculator-close');
+        var subnetInput = document.getElementById('subnet-input');
+        var subnetCalculateBtn = document.getElementById('subnet-calculate-btn');
+        var subnetResults = document.getElementById('subnet-results');
+        var subnetError = document.getElementById('subnet-error');
+        
+        if (subnetCalculatorLink && subnetCalculatorModal) {
+            subnetCalculatorLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                // Close toolbox menu
+                if (toolboxMenu) toolboxMenu.classList.remove('show');
+                subnetCalculatorModal.classList.add('show');
+                subnetInput.focus();
+            });
+            
+            if (subnetCalculatorClose) {
+                subnetCalculatorClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    subnetCalculatorModal.classList.remove('show');
+                });
+            }
+            
+            // Close modal when clicking outside
+            subnetCalculatorModal.addEventListener('click', function(e) {
+                if (e.target === subnetCalculatorModal) {
+                    subnetCalculatorModal.classList.remove('show');
+                }
+            });
+            
+            // Calculate on Enter or button click
+            function calculateSubnet() {
+                var input = subnetInput.value.trim();
+                if (!input) {
+                    showError('Please enter an IP address');
+                    return;
+                }
+                
+                subnetError.style.display = 'none';
+                subnetResults.style.display = 'none';
+                
+                try {
+                    var result = parseAndCalculate(input);
+                    displayResults(result);
+                } catch (err) {
+                    showError(err.message || 'Invalid input. Please check your IP address format.');
+                }
+            }
+            
+            subnetInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    calculateSubnet();
+                }
+            });
+            
+            subnetCalculateBtn.addEventListener('click', calculateSubnet);
+        }
+        
+        function showError(message) {
+            subnetError.textContent = message;
+            subnetError.style.display = 'block';
+            subnetResults.style.display = 'none';
+        }
+        
+        function parseAndCalculate(input) {
+            // Check if IPv6
+            if (input.includes(':')) {
+                return calculateIPv6(input);
+            } else {
+                return calculateIPv4(input);
+            }
+        }
+        
+        function calculateIPv4(input) {
+            var ip, cidr, netmask;
+            
+            // Try CIDR notation first (e.g., 192.168.1.1/24)
+            var cidrMatch = input.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+            if (cidrMatch) {
+                ip = cidrMatch[1];
+                cidr = parseInt(cidrMatch[2]);
+                if (cidr < 0 || cidr > 32) throw new Error('CIDR must be between 0 and 32');
+                netmask = cidrToNetmask(cidr);
+            } else {
+                // Try subnet mask notation (e.g., 192.168.1.1 255.255.255.0)
+                var parts = input.split(/\s+/);
+                if (parts.length === 2) {
+                    ip = parts[0];
+                    netmask = parts[1];
+                    cidr = netmaskToCidr(netmask);
+                } else {
+                    throw new Error('Invalid format. Use CIDR (192.168.1.1/24) or subnet mask (192.168.1.1 255.255.255.0)');
+                }
+            }
+            
+            // Validate IP
+            if (!isValidIPv4(ip)) throw new Error('Invalid IPv4 address');
+            if (!isValidIPv4(netmask)) throw new Error('Invalid subnet mask');
+            
+            var ipNum = ipToNumber(ip);
+            var maskNum = ipToNumber(netmask);
+            var networkNum = ipNum & maskNum;
+            var broadcastNum = networkNum | (~maskNum & 0xFFFFFFFF);
+            
+            var wildcardNum = ~maskNum & 0xFFFFFFFF;
+            var wildcard = numberToIP(wildcardNum);
+            
+            var network = numberToIP(networkNum);
+            var broadcast = numberToIP(broadcastNum);
+            
+            var totalHosts = Math.pow(2, 32 - cidr);
+            var usableHosts = totalHosts > 2 ? totalHosts - 2 : 0;
+            
+            var startIP = networkNum + 1;
+            var endIP = broadcastNum - 1;
+            var range = totalHosts > 2 ? numberToIP(startIP) + ' - ' + numberToIP(endIP) : 'N/A (network/broadcast only)';
+            
+            var binaryNetwork = ipToBinary(network);
+            var ipClass = getIPv4Class(ip);
+            
+            return {
+                ip: ip,
+                netmask: netmask,
+                wildcard: wildcard,
+                cidr: '/' + cidr,
+                network: network,
+                broadcast: broadcast,
+                range: range,
+                binary: binaryNetwork,
+                totalHosts: totalHosts.toLocaleString(),
+                usableHosts: usableHosts.toLocaleString(),
+                ipClass: ipClass
+            };
+        }
+        
+        function calculateIPv6(input) {
+            var ip, cidr;
+            
+            // Try CIDR notation (e.g., 2001:db8::1/64)
+            var cidrMatch = input.match(/^([0-9a-fA-F:]+)\/(\d+)$/);
+            if (cidrMatch) {
+                ip = cidrMatch[1];
+                cidr = parseInt(cidrMatch[2]);
+                if (cidr < 0 || cidr > 128) throw new Error('CIDR must be between 0 and 128 for IPv6');
+            } else {
+                throw new Error('IPv6 requires CIDR notation (e.g., 2001:db8::1/64)');
+            }
+            
+            // Normalize IPv6 address
+            ip = normalizeIPv6(ip);
+            if (!isValidIPv6(ip)) throw new Error('Invalid IPv6 address');
+            
+            // Convert to binary
+            var ipParts = ip.split(':');
+            var ipBinary = '';
+            for (var i = 0; i < 8; i++) {
+                var hex = parseInt(ipParts[i] || '0', 16);
+                ipBinary += hex.toString(2).padStart(16, '0');
+            }
+            
+            // Calculate network and broadcast
+            var networkBinary = ipBinary.substring(0, cidr) + '0'.repeat(128 - cidr);
+            var broadcastBinary = ipBinary.substring(0, cidr) + '1'.repeat(128 - cidr);
+            
+            var network = binaryToIPv6(networkBinary);
+            var broadcast = binaryToIPv6(broadcastBinary);
+            
+            // Calculate hosts (for very large numbers, use scientific notation)
+            var hostBits = 128 - cidr;
+            var totalHosts = hostBits === 0 ? 1 : (hostBits > 64 ? Math.pow(2, 64) * Math.pow(2, hostBits - 64) : Math.pow(2, hostBits));
+            var usableHosts = totalHosts > 2 ? totalHosts - 2 : 0;
+            
+            // Format large numbers
+            var formatHosts = function(num) {
+                if (num > 1e20) return num.toExponential(2);
+                if (num > 1e15) return num.toExponential(1);
+                return num.toLocaleString();
+            };
+            
+            // For IPv6, usable range is network+1 to broadcast-1
+            var startIP = addOneIPv6(network);
+            var endIP = subtractOneIPv6(broadcast);
+            var range = totalHosts > 2 ? startIP + ' - ' + endIP : 'N/A (network/broadcast only)';
+            
+            // Format binary (show first 64 bits)
+            var binaryDisplay = networkBinary.substring(0, 64).match(/.{1,16}/g).join(' ') + ' ... ' + networkBinary.substring(64).match(/.{1,16}/g).join(' ');
+            
+            return {
+                ip: compressIPv6(ip),
+                netmask: 'IPv6 uses prefix length, not netmask',
+                wildcard: 'N/A for IPv6',
+                cidr: '/' + cidr,
+                network: compressIPv6(network),
+                broadcast: compressIPv6(broadcast),
+                range: range,
+                binary: binaryDisplay,
+                totalHosts: formatHosts(totalHosts),
+                usableHosts: formatHosts(usableHosts),
+                ipClass: 'IPv6 (RFC 4291)'
+            };
+        }
+        
+        function ipToNumber(ip) {
+            var parts = ip.split('.');
+            return (parseInt(parts[0]) << 24) + (parseInt(parts[1]) << 16) + (parseInt(parts[2]) << 8) + parseInt(parts[3]);
+        }
+        
+        function numberToIP(num) {
+            return ((num >>> 24) & 0xFF) + '.' + ((num >>> 16) & 0xFF) + '.' + ((num >>> 8) & 0xFF) + '.' + (num & 0xFF);
+        }
+        
+        function ipToBinary(ip) {
+            var num = ipToNumber(ip);
+            var binary = num.toString(2).padStart(32, '0');
+            return binary.substring(0, 8) + '.' + binary.substring(8, 16) + '.' + binary.substring(16, 24) + '.' + binary.substring(24, 32);
+        }
+        
+        function cidrToNetmask(cidr) {
+            var mask = (0xFFFFFFFF << (32 - cidr)) >>> 0;
+            return numberToIP(mask);
+        }
+        
+        function netmaskToCidr(netmask) {
+            var num = ipToNumber(netmask);
+            var cidr = 0;
+            while (num & 0x80000000) {
+                cidr++;
+                num = (num << 1) >>> 0;
+            }
+            return cidr;
+        }
+        
+        function isValidIPv4(ip) {
+            var parts = ip.split('.');
+            if (parts.length !== 4) return false;
+            for (var i = 0; i < 4; i++) {
+                var num = parseInt(parts[i]);
+                if (isNaN(num) || num < 0 || num > 255) return false;
+            }
+            return true;
+        }
+        
+        function getIPv4Class(ip) {
+            var firstOctet = parseInt(ip.split('.')[0]);
+            if (firstOctet >= 1 && firstOctet <= 126) {
+                if (firstOctet == 10) return 'Class A - Private (RFC 1918)';
+                return 'Class A - Public';
+            } else if (firstOctet >= 128 && firstOctet <= 191) {
+                if (firstOctet == 172 && parseInt(ip.split('.')[1]) >= 16 && parseInt(ip.split('.')[1]) <= 31) {
+                    return 'Class B - Private (RFC 1918)';
+                }
+                return 'Class B - Public';
+            } else if (firstOctet >= 192 && firstOctet <= 223) {
+                if (firstOctet == 192 && parseInt(ip.split('.')[1]) == 168) {
+                    return 'Class C - Private (RFC 1918)';
+                }
+                if (firstOctet == 192 && parseInt(ip.split('.')[1]) == 0 && parseInt(ip.split('.')[2]) == 0) {
+                    return 'Class C - Carrier-Grade NAT (RFC 6888)';
+                }
+                return 'Class C - Public';
+            } else if (firstOctet >= 224 && firstOctet <= 239) {
+                return 'Class D - Multicast (RFC 1112)';
+            } else if (firstOctet >= 240 && firstOctet <= 255) {
+                return 'Class E - Reserved (RFC 1112)';
+            }
+            return 'Invalid';
+        }
+        
+        function normalizeIPv6(ip) {
+            // Expand IPv6 address
+            if (ip.includes('::')) {
+                var parts = ip.split('::');
+                var left = parts[0] ? parts[0].split(':').filter(function(p) { return p; }) : [];
+                var right = parts[1] ? parts[1].split(':').filter(function(p) { return p; }) : [];
+                var missing = 8 - left.length - right.length;
+                var expanded = left.concat(Array(missing).fill('0')).concat(right);
+                while (expanded.length < 8) expanded.push('0');
+                return expanded.map(function(p) { return parseInt(p || '0', 16).toString(16).padStart(4, '0'); }).join(':');
+            } else {
+                var segments = ip.split(':');
+                while (segments.length < 8) segments.push('0');
+                return segments.map(function(p) { return parseInt(p || '0', 16).toString(16).padStart(4, '0'); }).join(':');
+            }
+        }
+        
+        function compressIPv6(ip) {
+            // Compress IPv6 address (remove leading zeros and longest ::)
+            var parts = ip.split(':');
+            // Remove leading zeros
+            parts = parts.map(function(p) {
+                var num = parseInt(p, 16);
+                return num.toString(16);
+            });
+            // Find longest sequence of zeros
+            var maxZeroStart = -1;
+            var maxZeroLen = 0;
+            var zeroStart = -1;
+            var zeroLen = 0;
+            for (var i = 0; i < parts.length; i++) {
+                if (parts[i] === '0') {
+                    if (zeroStart === -1) zeroStart = i;
+                    zeroLen++;
+                } else {
+                    if (zeroLen > maxZeroLen) {
+                        maxZeroLen = zeroLen;
+                        maxZeroStart = zeroStart;
+                    }
+                    zeroStart = -1;
+                    zeroLen = 0;
+                }
+            }
+            if (zeroLen > maxZeroLen) {
+                maxZeroLen = zeroLen;
+                maxZeroStart = zeroStart;
+            }
+            // Compress longest zero sequence
+            if (maxZeroLen > 1) {
+                parts.splice(maxZeroStart, maxZeroLen, '');
+                if (maxZeroStart === 0 || maxZeroStart === parts.length - 1) {
+                    parts.splice(maxZeroStart, 0, '');
+                }
+            }
+            return parts.join(':');
+        }
+        
+        function isValidIPv6(ip) {
+            var parts = ip.split(':');
+            if (parts.length !== 8) return false;
+            for (var i = 0; i < 8; i++) {
+                var num = parseInt(parts[i], 16);
+                if (isNaN(num) || num < 0 || num > 0xFFFF) return false;
+            }
+            return true;
+        }
+        
+        function binaryToIPv6(binary) {
+            var parts = [];
+            for (var i = 0; i < 8; i++) {
+                var hex = parseInt(binary.substring(i * 16, (i + 1) * 16), 2).toString(16);
+                parts.push(hex);
+            }
+            return parts.join(':');
+        }
+        
+        function addOneIPv6(ip) {
+            var parts = ip.split(':').map(function(p) { return parseInt(p, 16); });
+            for (var i = 7; i >= 0; i--) {
+                parts[i]++;
+                if (parts[i] <= 0xFFFF) break;
+                parts[i] = 0;
+            }
+            return parts.map(function(p) { return p.toString(16).padStart(4, '0'); }).join(':');
+        }
+        
+        function subtractOneIPv6(ip) {
+            var parts = ip.split(':').map(function(p) { return parseInt(p, 16); });
+            for (var i = 7; i >= 0; i--) {
+                parts[i]--;
+                if (parts[i] >= 0) break;
+                parts[i] = 0xFFFF;
+            }
+            return parts.map(function(p) { return p.toString(16).padStart(4, '0'); }).join(':');
+        }
+        
+        function displayResults(result) {
+            document.getElementById('result-ip').textContent = result.ip;
+            document.getElementById('result-netmask').textContent = result.netmask;
+            document.getElementById('result-wildcard').textContent = result.wildcard;
+            document.getElementById('result-cidr').textContent = result.cidr;
+            document.getElementById('result-network').textContent = result.network;
+            document.getElementById('result-broadcast').textContent = result.broadcast;
+            document.getElementById('result-range').textContent = result.range;
+            document.getElementById('result-binary').textContent = result.binary;
+            document.getElementById('result-total-hosts').textContent = result.totalHosts;
+            document.getElementById('result-usable-hosts').textContent = result.usableHosts;
+            document.getElementById('result-class').textContent = result.ipClass;
+            subnetResults.style.display = 'block';
+        }
+
+        // Whois Modal
+        var whoisLink = document.getElementById('whois-link');
+        var whoisModal = document.getElementById('whois-modal');
+        var whoisClose = document.getElementById('whois-close');
+        var whoisInput = document.getElementById('whois-input');
+        var whoisQueryBtn = document.getElementById('whois-query-btn');
+        var whoisResults = document.getElementById('whois-results');
+        var whoisOutput = document.getElementById('whois-output');
+        var whoisError = document.getElementById('whois-error');
+        var whoisLoading = document.getElementById('whois-loading');
+        
+        if (whoisLink && whoisModal) {
+            whoisLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                // Close toolbox menu
+                if (toolboxMenu) toolboxMenu.classList.remove('show');
+                whoisModal.classList.add('show');
+                whoisInput.focus();
+            });
+            
+            if (whoisClose) {
+                whoisClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    whoisModal.classList.remove('show');
+                });
+            }
+            
+            // Close modal when clicking outside
+            whoisModal.addEventListener('click', function(e) {
+                if (e.target === whoisModal) {
+                    whoisModal.classList.remove('show');
+                }
+            });
+            
+            // Query on Enter or button click
+            function queryWhois() {
+                var query = whoisInput.value.trim();
+                if (!query) {
+                    showWhoisError('Please enter a domain name or IP address');
+                    return;
+                }
+                
+                whoisError.style.display = 'none';
+                whoisResults.style.display = 'none';
+                whoisLoading.style.display = 'block';
+                
+                var formData = new FormData();
+                formData.append('query', query);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                
+                fetch('{% url "whois_query" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) {
+                    return response.json();
+                })
+                .then(function(data) {
+                    whoisLoading.style.display = 'none';
+                    if (data.success) {
+                        whoisOutput.textContent = data.output;
+                        whoisResults.style.display = 'block';
+                    } else {
+                        showWhoisError(data.error || 'An error occurred');
+                    }
+                })
+                .catch(function(err) {
+                    whoisLoading.style.display = 'none';
+                    showWhoisError('Network error: ' + err.message);
+                });
+            }
+            
+            function showWhoisError(message) {
+                whoisError.textContent = message;
+                whoisError.style.display = 'block';
+                whoisResults.style.display = 'none';
+            }
+            
+            whoisInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    queryWhois();
+                }
+            });
+            
+            whoisQueryBtn.addEventListener('click', queryWhois);
+        }
+        
+        // Dig DNS Modal
+        var digDnsLink = document.getElementById('dig-dns-link');
+        var digDnsModal = document.getElementById('dig-dns-modal');
+        var digDnsClose = document.getElementById('dig-dns-close');
+        var digInput = document.getElementById('dig-input');
+        var digType = document.getElementById('dig-type');
+        var digServer = document.getElementById('dig-server');
+        var digQueryBtn = document.getElementById('dig-query-btn');
+        var digResults = document.getElementById('dig-results');
+        var digOutput = document.getElementById('dig-output');
+        var digError = document.getElementById('dig-error');
+        var digLoading = document.getElementById('dig-loading');
+        
+        if (digDnsLink && digDnsModal) {
+            digDnsLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                // Close toolbox menu
+                if (toolboxMenu) toolboxMenu.classList.remove('show');
+                digDnsModal.classList.add('show');
+                digInput.focus();
+            });
+            
+            if (digDnsClose) {
+                digDnsClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    digDnsModal.classList.remove('show');
+                });
+            }
+            
+            // Close modal when clicking outside
+            digDnsModal.addEventListener('click', function(e) {
+                if (e.target === digDnsModal) {
+                    digDnsModal.classList.remove('show');
+                }
+            });
+            
+            // Query on Enter or button click
+            function queryDig() {
+                var query = digInput.value.trim();
+                if (!query) {
+                    showDigError('Please enter a domain name or IP address');
+                    return;
+                }
+                
+                digError.style.display = 'none';
+                digResults.style.display = 'none';
+                digLoading.style.display = 'block';
+                
+                var formData = new FormData();
+                formData.append('query', query);
+                var queryType = digType.value;
+                if (queryType) {
+                    formData.append('type', queryType);
+                }
+                var server = digServer.value.trim();
+                if (server) {
+                    formData.append('server', server);
+                }
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                
+                fetch('{% url "dig_query" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) {
+                    return response.json();
+                })
+                .then(function(data) {
+                    digLoading.style.display = 'none';
+                    if (data.success) {
+                        digOutput.textContent = data.output;
+                        digResults.style.display = 'block';
+                    } else {
+                        showDigError(data.error || 'An error occurred');
+                    }
+                })
+                .catch(function(err) {
+                    digLoading.style.display = 'none';
+                    showDigError('Network error: ' + err.message);
+                });
+            }
+            
+            function showDigError(message) {
+                digError.textContent = message;
+                digError.style.display = 'block';
+                digResults.style.display = 'none';
+            }
+            
+            digInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    queryDig();
+                }
+            });
+            
+            digQueryBtn.addEventListener('click', queryDig);
+        }
+        
+        // MAC Lookup Modal
+        var macLookupLink = document.getElementById('mac-lookup-link');
+        var macLookupModal = document.getElementById('mac-lookup-modal');
+        var macLookupClose = document.getElementById('mac-lookup-close');
+        var macInput = document.getElementById('mac-input');
+        var macQueryBtn = document.getElementById('mac-query-btn');
+        var macResults = document.getElementById('mac-results');
+        var macAddressDisplay = document.getElementById('mac-address-display');
+        var macVendor = document.getElementById('mac-vendor');
+        var macError = document.getElementById('mac-error');
+        var macLoading = document.getElementById('mac-loading');
+        
+        if (macLookupLink && macLookupModal) {
+            macLookupLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                // Close toolbox menu
+                if (toolboxMenu) toolboxMenu.classList.remove('show');
+                macLookupModal.classList.add('show');
+                macInput.focus();
+            });
+            
+            if (macLookupClose) {
+                macLookupClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    macLookupModal.classList.remove('show');
+                });
+            }
+            
+            // Close modal when clicking outside
+            macLookupModal.addEventListener('click', function(e) {
+                if (e.target === macLookupModal) {
+                    macLookupModal.classList.remove('show');
+                }
+            });
+            
+            // Query on Enter or button click
+            function queryMac() {
+                var query = macInput.value.trim();
+                if (!query) {
+                    showMacError('Please enter a MAC address');
+                    return;
+                }
+                
+                macError.style.display = 'none';
+                macResults.style.display = 'none';
+                macLoading.style.display = 'block';
+                
+                var formData = new FormData();
+                formData.append('mac', query);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                
+                fetch('{% url "mac_lookup" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) {
+                    return response.json();
+                })
+                .then(function(data) {
+                    macLoading.style.display = 'none';
+                    if (data.success) {
+                        macAddressDisplay.textContent = data.mac;
+                        macVendor.textContent = data.vendor;
+                        macResults.style.display = 'block';
+                    } else {
+                        showMacError(data.error || 'An error occurred');
+                    }
+                })
+                .catch(function(err) {
+                    macLoading.style.display = 'none';
+                    showMacError('Network error: ' + err.message);
+                });
+            }
+            
+            function showMacError(message) {
+                macError.textContent = message;
+                macError.style.display = 'block';
+                macResults.style.display = 'none';
+            }
+            
+            macInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    queryMac();
+                }
+            });
+            
+            macQueryBtn.addEventListener('click', queryMac);
+        }
+        
+        // Update Esc key handler to close all modals
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (helpModal && helpModal.classList.contains('show')) {
+                    helpModal.classList.remove('show');
+                }
+                if (subnetCalculatorModal && subnetCalculatorModal.classList.contains('show')) {
+                    subnetCalculatorModal.classList.remove('show');
+                }
+                if (whoisModal && whoisModal.classList.contains('show')) {
+                    whoisModal.classList.remove('show');
+                }
+                if (digDnsModal && digDnsModal.classList.contains('show')) {
+                    digDnsModal.classList.remove('show');
+                }
+                if (macLookupModal && macLookupModal.classList.contains('show')) {
+                    macLookupModal.classList.remove('show');
+                }
+                if (quickAddModal && quickAddModal.classList.contains('show')) {
+                    quickAddModal.classList.remove('show');
+                }
+            }
+        });
+        
+        // Quick Add Modal
+        var quickAddButton = document.getElementById('quick-add-button');
+        var quickAddModal = document.getElementById('quick-add-modal');
+        var quickAddClose = document.getElementById('quick-add-close');
+        var quickAddTabs = document.querySelectorAll('.quick-add-tab');
+        var quickAddForms = document.querySelectorAll('.quick-add-form');
+        var noteForm = document.getElementById('quick-add-note-form');
+        var taskForm = document.getElementById('quick-add-task-form');
+        
+        if (quickAddButton && quickAddModal) {
+            quickAddButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                quickAddModal.classList.add('show');
+                // Focus on first input of active form (task form is default)
+                var activeForm = document.querySelector('.quick-add-form[style*="block"]');
+                if (activeForm) {
+                    var firstInput = activeForm.querySelector('input[type="text"], textarea');
+                    if (firstInput) firstInput.focus();
+                } else {
+                    // Fallback: focus on task form
+                    if (taskForm) {
+                        var taskInput = taskForm.querySelector('input[type="text"]');
+                        if (taskInput) taskInput.focus();
+                    }
+                }
+            });
+            
+            if (quickAddClose) {
+                quickAddClose.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    quickAddModal.classList.remove('show');
+                });
+            }
+            
+            // Tab switching
+            quickAddTabs.forEach(function(tab) {
+                tab.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var tabName = this.getAttribute('data-tab');
+                    quickAddTabs.forEach(function(t) { t.classList.remove('active'); });
+                    quickAddForms.forEach(function(f) { f.style.display = 'none'; });
+                    this.classList.add('active');
+                    if (tabName === 'note') {
+                        noteForm.style.display = 'block';
+                        noteForm.querySelector('input[type="text"]').focus();
+                    } else {
+                        taskForm.style.display = 'block';
+                        taskForm.querySelector('input[type="text"]').focus();
+                    }
+                });
+            });
+            
+            // Close modal when clicking outside
+            quickAddModal.addEventListener('click', function(e) {
+                if (e.target === quickAddModal) {
+                    quickAddModal.classList.remove('show');
+                }
+            });
+            
+            // Handle form submissions
+            if (noteForm) {
+                noteForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    var formData = new FormData(noteForm);
+                    formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                    
+                    fetch('{% url "quick_add" %}', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            quickAddModal.classList.remove('show');
+                            noteForm.reset();
+                            // Redirect to the created note
+                            window.location.href = data.url;
+                        } else {
+                            alert('Error: ' + (data.error || 'Failed to create note'));
+                        }
+                    })
+                    .catch(function(err) {
+                        alert('Error: ' + err.message);
+                    });
+                });
+            }
+            
+            if (taskForm) {
+                // Load projects for dropdown when task tab is opened
+                var projectSelect = document.getElementById('quick-task-project');
+                var projectsLoaded = false;
+                
+                quickAddTabs.forEach(function(tab) {
+                    if (tab.getAttribute('data-tab') === 'task') {
+                        tab.addEventListener('click', function() {
+                            if (!projectsLoaded && projectSelect) {
+                                fetch('{% url "quick_add" %}', {
+                                    method: 'GET',
+                                    headers: {
+                                        'X-Requested-With': 'XMLHttpRequest'
+                                    }
+                                })
+                                .then(function(response) { return response.json(); })
+                                .then(function(data) {
+                                    if (data.projects) {
+                                        // Clear existing options except Inbox
+                                        var inboxOption = projectSelect.querySelector('option[value="project-inbox"]');
+                                        projectSelect.innerHTML = '';
+                                        if (inboxOption) {
+                                            projectSelect.appendChild(inboxOption);
+                                        }
+                                        // Add other projects
+                                        data.projects.forEach(function(project) {
+                                            var option = document.createElement('option');
+                                            option.value = project.id;
+                                            option.textContent = project.title;
+                                            projectSelect.appendChild(option);
+                                        });
+                                        projectsLoaded = true;
+                                    }
+                                })
+                                .catch(function(err) {
+                                    console.error('Error loading projects:', err);
+                                });
+                            }
+                        });
+                    }
+                });
+                
+                taskForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    
+                    // Validate title
+                    var titleInput = document.getElementById('quick-task-title');
+                    if (!titleInput || !titleInput.value.trim()) {
+                        alert('Please enter a task title');
+                        return;
+                    }
+                    
+                    var formData = new FormData(taskForm);
+                    formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                    
+                    // Ensure item_type is set
+                    if (!formData.get('item_type')) {
+                        formData.set('item_type', 'task');
+                    }
+                    
+                    // Ensure project_id is set (default to inbox)
+                    if (!formData.get('project_id')) {
+                        formData.set('project_id', 'project-inbox');
+                    }
+                    
+                    fetch('{% url "quick_add" %}', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(function(response) {
+                        if (!response.ok) {
+                            return response.json().then(function(data) {
+                                throw new Error(data.error || 'Server error: ' + response.status);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(function(data) {
+                        if (data.success) {
+                            quickAddModal.classList.remove('show');
+                            taskForm.reset();
+                            // Reset project to Inbox
+                            if (projectSelect) projectSelect.value = 'project-inbox';
+                            // Redirect to the created task
+                            window.location.href = data.url;
+                        } else {
+                            alert('Error: ' + (data.error || 'Failed to create task'));
+                        }
+                    })
+                    .catch(function(err) {
+                        alert('Error: ' + err.message);
+                        console.error('Quick add error:', err);
+                    });
+                });
+            }
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

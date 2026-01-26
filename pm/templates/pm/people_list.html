@@ -1,0 +1,52 @@
+{% extends "pm/base.html" %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; people
+</div>
+
+<div class="page-title">People</div>
+
+<div class="section">
+    <div class="section-title">Create Person</div>
+    <form method="post" class="quick-setting-form">
+        {% csrf_token %}
+        <input type="text" name="person_name" placeholder="Person name" required style="width: 200px;">
+        <button type="submit" name="create_person">Create</button>
+    </form>
+</div>
+
+<div class="section">
+    <div class="section-title">All People</div>
+    {% if people %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Projects</th>
+                <th>Epics</th>
+                <th>Tasks</th>
+                <th>Subtasks</th>
+                <th>Notes</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for person in people %}
+            <tr>
+                <td><a href="{% url 'person_detail' person_id=person.id %}">@{{ person.name }}</a></td>
+                <td>{{ person.projects_count }}</td>
+                <td>{{ person.epics_count }}</td>
+                <td>{{ person.tasks_count }}</td>
+                <td>{{ person.subtasks_count }}</td>
+                <td>{{ person.notes_count }}</td>
+                <td><strong>{{ person.total_count }}</strong></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No people found. Create one above to get started.</div>
+    {% endif %}
+</div>
+{% endblock %}

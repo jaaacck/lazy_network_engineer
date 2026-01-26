@@ -1,0 +1,47 @@
+{% extends "pm/base.html" %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; search
+</div>
+
+<div class="page-title">Search</div>
+
+<div class="section">
+    <form method="get">
+        <div class="form-group">
+            <label for="q">Search</label>
+            <input type="text" name="q" id="q" value="{{ query }}" placeholder="Title, description, updates...">
+        </div>
+        <div class="form-actions">
+            <button type="submit">Search</button>
+        </div>
+    </form>
+</div>
+
+{% if query %}
+<div class="section">
+    <div class="section-title">Results</div>
+    {% if results %}
+    <table>
+        <tr>
+            <th>Type</th>
+            <th>Item</th>
+            <th>Match</th>
+        </tr>
+        {% for item in results %}
+        <tr>
+            <td><span class="badge">{{ item.type }}</span></td>
+            <td>{% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}<a href="{{ item.url }}">{{ item.title }}</a></td>
+            <td style="text-align: right;">
+                {% if item.snippet %}{{ item.snippet|safe }}{% else %}—{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty">No results found.</div>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,138 @@
+{% extends 'pm/base.html' %}
+
+{% block content %}
+<div class="page-title">Projects</div>
+
+<div class="section">
+    <div class="section-title">
+        {% if show_archived %}
+        <a href="{% url 'project_list' %}" class="button">Show Active</a>
+        {% else %}
+        <a href="{% url 'project_list' %}?archived=true" class="button">Show Archived</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="section">
+    <div class="section-title">Quick Create</div>
+    <form method="post" action="{% url 'new_project' %}" class="quick-setting-form ajax-create-form" id="new-project-form">
+        {% csrf_token %}
+        <label for="quick_project_title">Project</label>
+        <input type="text" name="title" id="quick_project_title" placeholder="Project name" required>
+        <select name="priority">
+            <option value="">Priority</option>
+            <option value="1">P1</option>
+            <option value="2">P2</option>
+            <option value="3">P3</option>
+            <option value="4">P4</option>
+            <option value="5">P5</option>
+        </select>
+        <select name="status">
+            <option value="active">active</option>
+            <option value="completed">completed</option>
+            <option value="canceled">canceled</option>
+        </select>
+        <button type="submit">Create</button>
+    </form>
+</div>
+
+<div class="item-list" id="projects-list"{% if not projects %} style="display: none;"{% endif %}>
+    {% for project in projects %}
+    <div class="item">
+        <div class="item-title">
+            <a href="{% url 'project_detail' project=project.id %}">{{ project.title }}</a>
+            <span class="badge badge-status status-{{ project.status }}">{{ project.status }}</span>
+        </div>
+        
+        <details class="project-overview">
+            <summary>Overview</summary>
+            <div class="project-stats">
+                <div class="stat-row">
+                    <span class="stat-label">Completion:</span>
+                    <span class="stat-value">{{ project.completion_percentage }}%</span>
+                </div>
+                <div class="progress">
+                    <div class="progress-bar" style="width: {{ project.completion_percentage }}%"></div>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Epics:</span>
+                    <span class="stat-value">{{ project.epics_count }}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tasks:</span>
+                    <span class="stat-value">{{ project.done_tasks_count }} / {{ project.tasks_count }} done</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Subtasks:</span>
+                    <span class="stat-value">{{ project.done_subtasks_count }} / {{ project.subtasks_count }} done</span>
+                </div>
+            </div>
+        </details>
+    </div>
+    {% endfor %}
+</div>
+<div id="projects-empty" class="empty"{% if projects %} style="display: none;"{% endif %}>No projects yet.</div>
+
+<script>
+// AJAX project creation
+var projectForm = document.getElementById('new-project-form');
+if (projectForm) {
+    projectForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var formData = new FormData(projectForm);
+        
+        fetch(projectForm.action, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                // Show list if hidden
+                var list = document.getElementById('projects-list');
+                var empty = document.getElementById('projects-empty');
+                
+                list.style.display = '';
+                empty.style.display = 'none';
+                
+                // Create new item
+                var div = document.createElement('div');
+                div.className = 'item';
+                div.innerHTML = '<div class="item-title">' +
+                    '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a>' +
+                    '<span class="badge badge-status status-' + data.status + '">' + data.status + '</span>' +
+                    '</div>' +
+                    '<details class="project-overview">' +
+                    '<summary>Overview</summary>' +
+                    '<div class="project-stats">' +
+                    '<div class="stat-row"><span class="stat-label">Completion:</span><span class="stat-value">0%</span></div>' +
+                    '<div class="progress"><div class="progress-bar" style="width: 0%"></div></div>' +
+                    '<div class="stat-row"><span class="stat-label">Epics:</span><span class="stat-value">0</span></div>' +
+                    '<div class="stat-row"><span class="stat-label">Tasks:</span><span class="stat-value">0 / 0 done</span></div>' +
+                    '<div class="stat-row"><span class="stat-label">Subtasks:</span><span class="stat-value">0 / 0 done</span></div>' +
+                    '</div></details>';
+                
+                // Insert at top of list
+                list.insertBefore(div, list.firstChild);
+                
+                // Reset form
+                projectForm.reset();
+                projectForm.querySelector('input[name="title"]').focus();
+            }
+        })
+        .catch(function(err) {
+            console.error('Error creating project:', err);
+        });
+    });
+}
+
+function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

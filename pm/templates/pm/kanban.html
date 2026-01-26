@@ -1,0 +1,184 @@
+{% extends "pm/base.html" %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    {% if scope == 'epic' %}
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
+    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a> &gt;
+    {% elif scope == 'project' %}
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
+    {% endif %}
+    kanban
+</div>
+
+<div class="page-title">
+    {% if scope == 'epic' %}
+    Kanban: {{ epic_title }}
+    {% elif scope == 'project' %}
+    Kanban: {{ project_title }}
+    {% else %}
+    Kanban Board
+    {% endif %}
+</div>
+
+<div class="kanban-board">
+    <div class="kanban-column" data-status="todo">
+        <div class="kanban-column-header">
+            <h3>Todo</h3>
+            <span class="badge" id="todo-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="todo-column">
+            {% for item in items %}
+                {% if item.status == 'todo' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="in_progress">
+        <div class="kanban-column-header">
+            <h3>In Progress</h3>
+            <span class="badge" id="in-progress-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="in-progress-column">
+            {% for item in items %}
+                {% if item.status == 'in_progress' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="done">
+        <div class="kanban-column-header">
+            <h3>Done</h3>
+            <span class="badge" id="done-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="done-column">
+            {% for item in items %}
+                {% if item.status == 'done' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function updateCounts() {
+        document.getElementById('todo-count').textContent = document.getElementById('todo-column').children.length;
+        document.getElementById('in-progress-count').textContent = document.getElementById('in-progress-column').children.length;
+        document.getElementById('done-count').textContent = document.getElementById('done-column').children.length;
+    }
+    
+    updateCounts();
+    
+    var draggedCard = null;
+    var columns = document.querySelectorAll('.kanban-column-content');
+
+    columns.forEach(function(column) {
+        column.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            var afterElement = getDragAfterElement(column, e.clientY);
+            if (afterElement == null) {
+                column.appendChild(draggedCard);
+            } else {
+                column.insertBefore(draggedCard, afterElement);
+            }
+        });
+
+        column.addEventListener('drop', function(e) {
+            e.preventDefault();
+            if (draggedCard) {
+                var newStatus = column.closest('.kanban-column').getAttribute('data-status');
+                updateStatus(draggedCard, newStatus);
+            }
+        });
+    });
+
+    document.querySelectorAll('.kanban-card').forEach(function(card) {
+        card.addEventListener('dragstart', function() {
+            draggedCard = card;
+            card.style.opacity = '0.5';
+        });
+
+        card.addEventListener('dragend', function() {
+            card.style.opacity = '1';
+            draggedCard = null;
+        });
+    });
+
+    function getDragAfterElement(container, y) {
+        var draggableElements = [...container.querySelectorAll('.kanban-card:not(.dragging)')];
+        return draggableElements.reduce(function(closest, child) {
+            var box = child.getBoundingClientRect();
+            var offset = y - box.top - box.height / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
+            } else {
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    function updateStatus(card, newStatus) {
+        var formData = new FormData();
+        formData.append('type', card.getAttribute('data-type'));
+        formData.append('project_id', card.getAttribute('data-project'));
+        formData.append('epic_id', card.getAttribute('data-epic'));
+        formData.append('task_id', card.getAttribute('data-task') || card.getAttribute('data-id'));
+        if (card.getAttribute('data-type') === 'subtask') {
+            formData.append('subtask_id', card.getAttribute('data-id'));
+        }
+        formData.append('status', newStatus);
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+        fetch('{% url "update_task_status" %}', {
+            method: 'POST',
+            body: formData
+        }).then(function(response) {
+            if (response.ok) {
+                // Move card to new column visually
+                var newColumn = document.querySelector('[data-status="' + newStatus + '"] .kanban-column-content');
+                newColumn.appendChild(card);
+                updateCounts();
+            }
+        });
+    }
+</script>
+{% endblock %}

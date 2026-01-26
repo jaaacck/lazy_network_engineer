@@ -1,0 +1,45 @@
+{% extends 'pm/base.html' %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; new
+</div>
+
+<div class="page-title">New Project</div>
+
+<div class="section">
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="title">Title</label>
+            <input type="text" name="title" id="title" required autofocus>
+        </div>
+
+        <div class="form-group">
+            <label for="status">Status</label>
+            <select name="status" id="status">
+                <option value="active">active</option>
+                <option value="completed">completed</option>
+                <option value="canceled">canceled</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="color">Project Color</label>
+            <input type="color" name="color" id="color" value="#ff6600" style="width: 100px; height: 40px; padding: 0; border: 1px solid #ccc; border-radius: 3px; cursor: pointer;">
+            <div style="font-size: 8pt; color: #828282; margin-top: 4px;">Used to identify this project on the calendar (auto-assigned if left blank)</div>
+        </div>
+
+        <div class="form-group">
+            <label for="content">Description</label>
+            <textarea name="content" id="content" placeholder="Supports markdown"></textarea>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit">Create Project</button>
+            <a href="{% url 'project_list' %}" class="button button-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; notes
+</div>
+
+<div class="page-title">
+    Notes
+    <a href="{% url 'new_note' %}" class="button">new note</a>
+</div>
+
+<div class="item-list">
+    {% for note in notes %}
+    <div class="item">
+        <div class="item-title">
+            <a href="{% url 'note_detail' note_id=note.id %}">{{ note.title }}</a>
+        </div>
+        {% if note.people or note.labels %}
+        <div class="label-chips">
+            {% for person in note.people %}
+            {% if person.id %}<a href="{% url 'person_detail' person_id=person.id %}" class="label-chip people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }}; text-decoration: none;">@{{ person.name }}</a>{% else %}<span class="label-chip people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }};">@{{ person.name }}</span>{% endif %}
+            {% endfor %}
+            {% for label in note.labels %}
+            <span class="label-chip" style="background: #f0f0f0; color: #333;">
+                {{ label }}
+            </span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if note.preview %}
+        <div class="item-meta note-preview">
+            {{ note.preview|truncatewords:30 }}
+        </div>
+        {% endif %}
+        <div class="item-meta">
+            Created: {{ note.created }} {% if note.updated != note.created %}| Updated: {{ note.updated }}{% endif %}
+        </div>
+    </div>
+    {% empty %}
+    <div class="empty">No notes yet. <a href="{% url 'new_note' %}">Create your first note</a></div>
+    {% endfor %}
+</div>
+{% endblock %}

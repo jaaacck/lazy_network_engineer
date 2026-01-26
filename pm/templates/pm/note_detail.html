@@ -1,0 +1,625 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'notes_list' %}">notes</a> &gt;
+    {{ metadata.title }}
+</div>
+
+<div class="page-title">
+    <span>{{ metadata.title }}</span>
+    <div class="mode-toggle">
+        <a href="{% url 'note_detail' note_id=note_id %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
+        <a href="{% url 'note_detail' note_id=note_id %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
+        <form method="post" action="{% url 'delete_note' note_id=note_id %}">
+            {% csrf_token %}
+            <button type="submit" onclick="return confirm('Delete this note?')">delete</button>
+        </form>
+    </div>
+</div>
+
+<!-- Note Overview -->
+<div class="task-overview">
+    <div class="overview-row overview-tags">
+        <div class="overview-field overview-field-wide">
+            <span class="field-label">Labels</span>
+            <div class="field-value tag-chips">
+                {% for label in labels %}
+                <span class="label-chip" style="background: {{ label.color }}20; border-color: {{ label.color }}; color: {{ label.color }};">
+                    <a href="{% url 'search' %}?q={{ label.name|urlencode }}">{{ label.name }}</a>
+                    <form method="post" class="chip-remove">{% csrf_token %}<input type="hidden" name="quick_update" value="remove_label"><input type="hidden" name="label" value="{{ label.name }}"><button type="submit">×</button></form>
+                </span>
+                {% endfor %}
+                <div class="searchable-select tag-select">
+                    <input type="text" class="tag-search" placeholder="+ Add" data-target="labels-list">
+                    <div class="tag-dropdown" id="labels-list">
+                        {% for lbl in all_labels %}
+                        {% if lbl not in labels_names %}
+                        <form method="post" class="tag-option" data-search="{{ lbl }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_label">
+                            <input type="hidden" name="label" value="{{ lbl }}">
+                            <button type="submit">{{ lbl }}</button>
+                        </form>
+                        {% endif %}
+                        {% endfor %}
+                        <form method="post" class="tag-option tag-create hidden" data-search="">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_label">
+                            <input type="hidden" name="label" value="" class="new-tag-value">
+                            <button type="submit">+ Create "<span class="new-tag-name"></span>"</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="overview-field overview-field-wide">
+            <span class="field-label">People</span>
+            <div class="field-value tag-chips">
+                {% for person in people %}
+                <span class="people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }};">
+                    {% if person.id %}<a href="{% url 'person_detail' person_id=person.id %}">{{ person.name }}</a>{% else %}{{ person.name }}{% endif %}
+                    <form method="post" class="chip-remove">{% csrf_token %}<input type="hidden" name="quick_update" value="remove_person"><input type="hidden" name="person" value="{{ person.name }}"><button type="submit">×</button></form>
+                </span>
+                {% endfor %}
+                <div class="searchable-select tag-select">
+                    <input type="text" class="tag-search" placeholder="+ Add" data-target="people-list">
+                    <div class="tag-dropdown" id="people-list">
+                        {% for p in all_people %}
+                        {% if p not in people_names %}
+                        <form method="post" class="tag-option" data-search="{{ p }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_person">
+                            <input type="hidden" name="person" value="{{ p }}">
+                            <button type="submit">{{ p }}</button>
+                        </form>
+                        {% endif %}
+                        {% endfor %}
+                        <form method="post" class="tag-option tag-create hidden" data-search="">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_person">
+                            <input type="hidden" name="person" value="" class="new-tag-value">
+                            <button type="submit">+ Create "<span class="new-tag-name"></span>"</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not edit_mode %}
+    {% if content %}
+    <div class="section">
+        <div class="content">
+            {{ content|markdownify|safe }}
+        </div>
+    </div>
+    {% else %}
+    <div class="empty">No content yet.</div>
+    {% endif %}
+    
+    <!-- Create Projects, Epics, Tasks Section -->
+    <details class="section compact-section"{% if note_project or note_epics or note_tasks %} open{% endif %}>
+        <summary class="section-title">Create from Note</summary>
+        <div class="note-creation-section">
+            <!-- Project Selection/Creation -->
+            <div class="creation-group">
+                <strong class="creation-label">Project:</strong>
+                {% if note_project %}
+                <div class="selected-project">
+                    <a href="{% url 'project_detail' project=note_project.id %}">{{ note_project.title }}</a>
+                    <div class="searchable-select entity-select entity-select-inline">
+                        <button type="button" class="link-button" onclick="document.getElementById('project-change-dropdown').style.display = document.getElementById('project-change-dropdown').style.display === 'block' ? 'none' : 'block'">Change</button>
+                        <div class="entity-dropdown" id="project-change-dropdown" style="display: none;">
+                            {% for project in available_projects %}
+                            <form method="post" class="entity-option" data-search="{{ project.title }}">
+                                {% csrf_token %}
+                                <input type="hidden" name="quick_update" value="set_project">
+                                <input type="hidden" name="project_id" value="{{ project.id }}">
+                                <button type="submit">{{ project.title }}</button>
+                            </form>
+                            {% endfor %}
+                            <form method="post" class="entity-option entity-create" data-search="">
+                                {% csrf_token %}
+                                <input type="hidden" name="quick_update" value="create_project_from_note">
+                                <input type="text" name="title" placeholder="New project name..." class="create-input" required>
+                                <button type="submit">+ Create</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="creation-controls">
+                    <div class="searchable-select entity-select">
+                        <input type="text" class="entity-search" placeholder="Search or create project..." data-target="project-select-list" id="project-search-input">
+                        <div class="entity-dropdown" id="project-select-list">
+                            {% for project in available_projects %}
+                            <form method="post" class="entity-option" data-search="{{ project.title }}">
+                                {% csrf_token %}
+                                <input type="hidden" name="quick_update" value="set_project">
+                                <input type="hidden" name="project_id" value="{{ project.id }}">
+                                <button type="submit">{{ project.title }}</button>
+                            </form>
+                            {% endfor %}
+                            <form method="post" class="entity-option entity-create hidden" data-search="" id="project-create-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="quick_update" value="create_project_from_note">
+                                <input type="text" name="title" placeholder="New project name..." class="create-input" id="project-create-input" required>
+                                <button type="submit">+ Create</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Epic Creation (only if project is set) -->
+            {% if note_project %}
+            <div class="creation-group">
+                <strong class="creation-label">Epics:</strong>
+                <div class="creation-controls">
+                    <form method="post" class="inline-create-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="quick_update" value="create_epic_from_note">
+                        <input type="text" name="title" placeholder="Epic title..." required>
+                        <select name="priority">
+                            <option value="">Priority</option>
+                            <option value="1">P1</option>
+                            <option value="2">P2</option>
+                            <option value="3">P3</option>
+                            <option value="4">P4</option>
+                            <option value="5">P5</option>
+                        </select>
+                        <button type="submit">Create Epic</button>
+                    </form>
+                </div>
+                {% if note_epics %}
+                <div class="created-items">
+                    {% for epic in note_epics %}
+                    <div class="created-item">
+                        {% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}
+                        <a href="{% url 'epic_detail' project=note_project.id epic=epic.id %}">{{ epic.title }}</a>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Task Creation (only if project is set) -->
+            <div class="creation-group">
+                <strong class="creation-label">Tasks:</strong>
+                <div class="creation-controls">
+                    <form method="post" class="inline-create-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="quick_update" value="create_task_from_note">
+                        <input type="text" name="title" placeholder="Task title..." required>
+                        <select name="epic_id" required>
+                            <option value="">Select Epic...</option>
+                            {% for epic in project_epics %}
+                            <option value="{{ epic.id }}">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="priority">
+                            <option value="">Priority</option>
+                            <option value="1">P1</option>
+                            <option value="2">P2</option>
+                            <option value="3">P3</option>
+                            <option value="4">P4</option>
+                            <option value="5">P5</option>
+                        </select>
+                        <select name="status">
+                            <option value="todo">todo</option>
+                            <option value="in_progress">in progress</option>
+                            <option value="done">done</option>
+                        </select>
+                        <button type="submit">Create Task</button>
+                    </form>
+                </div>
+                {% if note_tasks %}
+                <div class="created-items">
+                    {% for task in note_tasks %}
+                    <div class="created-item">
+                        <span class="item-meta">{{ task.epic_title }}:</span>
+                        {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}
+                        <a href="{% url 'task_detail' project=note_project.id epic=task.epic_id task=task.id %}">{{ task.title }}</a>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="empty">Select or create a project to create epics and tasks.</div>
+            {% endif %}
+        </div>
+    </details>
+    
+    <!-- Backlinks Section (entities that have linked this note) -->
+    {% if backlinks.projects or backlinks.epics or backlinks.tasks or backlinks.subtasks %}
+    <details class="section compact-section" open>
+        <summary class="section-title">Linked From</summary>
+        <div class="backlinks-section">
+            {% if backlinks.projects %}
+            <div class="backlink-group">
+                <strong class="backlink-type">Projects:</strong>
+                <div class="backlink-list">
+                    {% for project in backlinks.projects %}
+                    <div class="backlink-item">
+                        <a href="{% url 'project_detail' project=project.id %}">{{ project.title }}</a>
+                        <form method="post" class="backlink-remove">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="unlink_project">
+                            <input type="hidden" name="project_id" value="{{ project.id }}">
+                            <button type="submit" class="delete-inline">×</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if backlinks.epics %}
+            <div class="backlink-group">
+                <strong class="backlink-type">Epics:</strong>
+                <div class="backlink-list">
+                    {% for epic in backlinks.epics %}
+                    <div class="backlink-item">
+                        {% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}
+                        <a href="{% url 'epic_detail' project=epic.project_id epic=epic.id %}">{{ epic.title }}</a>
+                        <form method="post" class="backlink-remove">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="unlink_epic">
+                            <input type="hidden" name="project_id" value="{{ epic.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ epic.id }}">
+                            <button type="submit" class="delete-inline">×</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if backlinks.tasks %}
+            <div class="backlink-group">
+                <strong class="backlink-type">Tasks:</strong>
+                <div class="backlink-list">
+                    {% for task in backlinks.tasks %}
+                    <div class="backlink-item">
+                        {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}
+                        <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">{{ task.title }}</a>
+                        <form method="post" class="backlink-remove">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="unlink_task">
+                            <input type="hidden" name="project_id" value="{{ task.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ task.epic_id }}">
+                            <input type="hidden" name="task_id" value="{{ task.id }}">
+                            <button type="submit" class="delete-inline">×</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if backlinks.subtasks %}
+            <div class="backlink-group">
+                <strong class="backlink-type">Subtasks:</strong>
+                <div class="backlink-list">
+                    {% for subtask in backlinks.subtasks %}
+                    <div class="backlink-item">
+                        {% if subtask.seq_id %}<span class="seq-id">{{ subtask.seq_id }}</span>{% endif %}
+                        <a href="{% url 'subtask_detail' project=subtask.project_id epic=subtask.epic_id task=subtask.task_id subtask=subtask.id %}">{{ subtask.title }}</a>
+                        <form method="post" class="backlink-remove">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="unlink_subtask">
+                            <input type="hidden" name="project_id" value="{{ subtask.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ subtask.epic_id }}">
+                            <input type="hidden" name="task_id" value="{{ subtask.task_id }}">
+                            <input type="hidden" name="subtask_id" value="{{ subtask.id }}">
+                            <button type="submit" class="delete-inline">×</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </details>
+    {% endif %}
+    
+    <!-- Link to Entities Section -->
+    <details class="section compact-section">
+        <summary class="section-title">Link to Entity</summary>
+        <div class="link-entities-section">
+            {% if available_projects %}
+            <div class="link-group">
+                <strong class="link-type">Projects:</strong>
+                <div class="searchable-select entity-select">
+                    <input type="text" class="entity-search" placeholder="Search projects..." data-target="projects-list">
+                    <div class="entity-dropdown" id="projects-list">
+                        {% for project in available_projects %}
+                        <form method="post" class="entity-option" data-search="{{ project.title }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="link_project">
+                            <input type="hidden" name="project_id" value="{{ project.id }}">
+                            <button type="submit">{{ project.title }}</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if available_epics %}
+            <div class="link-group">
+                <strong class="link-type">Epics:</strong>
+                <div class="searchable-select entity-select">
+                    <input type="text" class="entity-search" placeholder="Search epics..." data-target="epics-list">
+                    <div class="entity-dropdown" id="epics-list">
+                        {% for epic in available_epics %}
+                        <form method="post" class="entity-option" data-search="{{ epic.title }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="link_epic">
+                            <input type="hidden" name="project_id" value="{{ epic.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ epic.id }}">
+                            <button type="submit">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if available_tasks %}
+            <div class="link-group">
+                <strong class="link-type">Tasks:</strong>
+                <div class="searchable-select entity-select">
+                    <input type="text" class="entity-search" placeholder="Search tasks..." data-target="tasks-list">
+                    <div class="entity-dropdown" id="tasks-list">
+                        {% for task in available_tasks %}
+                        <form method="post" class="entity-option" data-search="{{ task.title }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="link_task">
+                            <input type="hidden" name="project_id" value="{{ task.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ task.epic_id }}">
+                            <input type="hidden" name="task_id" value="{{ task.id }}">
+                            <button type="submit">{% if task.seq_id %}{{ task.seq_id }} {% endif %}{{ task.title }}</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if available_subtasks %}
+            <div class="link-group">
+                <strong class="link-type">Subtasks:</strong>
+                <div class="searchable-select entity-select">
+                    <input type="text" class="entity-search" placeholder="Search subtasks..." data-target="subtasks-list">
+                    <div class="entity-dropdown" id="subtasks-list">
+                        {% for subtask in available_subtasks %}
+                        <form method="post" class="entity-option" data-search="{{ subtask.title }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="link_subtask">
+                            <input type="hidden" name="project_id" value="{{ subtask.project_id }}">
+                            <input type="hidden" name="epic_id" value="{{ subtask.epic_id }}">
+                            <input type="hidden" name="task_id" value="{{ subtask.task_id }}">
+                            <input type="hidden" name="subtask_id" value="{{ subtask.id }}">
+                            <button type="submit">{% if subtask.seq_id %}{{ subtask.seq_id }} {% endif %}{{ subtask.title }}</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if not available_projects and not available_epics and not available_tasks and not available_subtasks %}
+            <div class="empty">All entities are already linked.</div>
+            {% endif %}
+        </div>
+    </details>
+    
+    <div class="item-meta note-meta-spaced">
+        <strong>Created:</strong> {{ metadata.created }} {% if metadata.updated %}| <strong>Updated:</strong> {{ metadata.updated }}{% endif %}
+    </div>
+{% else %}
+    <div class="section">
+        <form method="post">
+            {% csrf_token %}
+            
+            <div class="form-group">
+                <label for="title">Title</label>
+                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="people">People (@mentions, comma-separated)</label>
+                <input type="text" name="people" id="people" value="{% if metadata.people %}{{ metadata.people|join:', ' }}{% endif %}" placeholder="@john, @jane">
+            </div>
+            
+            <div class="form-group">
+                <label for="labels">Labels (comma-separated)</label>
+                <input type="text" name="labels" id="labels" value="{% if metadata.labels %}{{ metadata.labels|join:', ' }}{% endif %}" placeholder="meeting, brainstorm">
+            </div>
+            
+            <div class="form-group">
+                <label for="content">Content (markdown)</label>
+                <textarea name="content" id="content">{{ content }}</textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit">Save</button>
+                <a href="{% url 'note_detail' note_id=note_id %}" class="button button-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if edit_mode %}
+<script>
+    var contentTextarea = document.getElementById('content');
+    if (contentTextarea) {
+        var editor = new EasyMDE({
+            element: contentTextarea,
+            spellChecker: false,
+            toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide']
+        });
+    }
+</script>
+{% endif %}
+
+<script>
+    // Searchable tag dropdowns (labels and people)
+    document.querySelectorAll('.tag-search').forEach(function(input) {
+        var targetId = input.getAttribute('data-target');
+        var dropdown = document.getElementById(targetId);
+        var createOption = dropdown ? dropdown.querySelector('.tag-create') : null;
+        
+        if (!dropdown) return;
+        
+        input.addEventListener('input', function() {
+            var query = input.value.toLowerCase().trim();
+            var hasExactMatch = false;
+            var visibleOptions = 0;
+            
+            // Show/hide existing options
+            dropdown.querySelectorAll('.tag-option:not(.tag-create)').forEach(function(opt) {
+                var searchText = opt.getAttribute('data-search') || '';
+                searchText = searchText.toLowerCase();
+                if (query && searchText.includes(query)) {
+                    opt.classList.remove('hidden');
+                    visibleOptions++;
+                    if (searchText === query) hasExactMatch = true;
+                } else if (query) {
+                    opt.classList.add('hidden');
+                } else {
+                    // Show all when query is empty
+                    opt.classList.remove('hidden');
+                    visibleOptions++;
+                }
+            });
+            
+            // Show/hide create option
+            if (createOption) {
+                if (query && !hasExactMatch) {
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                } else if (query && visibleOptions === 0) {
+                    // Show create option if no matches found
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                } else {
+                    createOption.classList.add('hidden');
+                }
+            }
+        });
+        
+        input.addEventListener('focus', function() {
+            dropdown.style.display = 'block';
+            // Show create option if there's text and no exact match
+            if (createOption && input.value.trim()) {
+                var query = input.value.toLowerCase().trim();
+                var hasExactMatch = false;
+                dropdown.querySelectorAll('.tag-option:not(.tag-create)').forEach(function(opt) {
+                    var searchText = (opt.getAttribute('data-search') || '').toLowerCase();
+                    if (searchText === query) hasExactMatch = true;
+                });
+                if (!hasExactMatch) {
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                }
+            }
+        });
+        
+        input.addEventListener('blur', function() {
+            setTimeout(function() {
+                dropdown.style.display = 'none';
+            }, 200);
+        });
+    });
+
+    // Searchable entity dropdowns
+    document.querySelectorAll('.entity-search').forEach(function(input) {
+        var targetId = input.getAttribute('data-target');
+        var dropdown = document.getElementById(targetId);
+        
+        input.addEventListener('input', function() {
+            var query = input.value.toLowerCase();
+            dropdown.querySelectorAll('.entity-option').forEach(function(opt) {
+                var searchText = opt.getAttribute('data-search').toLowerCase();
+                if (searchText.includes(query)) {
+                    opt.classList.remove('hidden');
+                } else {
+                    opt.classList.add('hidden');
+                }
+            });
+        });
+        
+        input.addEventListener('focus', function() {
+            dropdown.style.display = 'block';
+        });
+        
+        input.addEventListener('blur', function() {
+            setTimeout(function() {
+                dropdown.style.display = 'none';
+            }, 200);
+        });
+    });
+
+    // Handle project change dropdown
+    var projectChangeBtn = document.querySelector('.link-button');
+    var projectChangeDropdown = document.getElementById('project-change-dropdown');
+    if (projectChangeBtn && projectChangeDropdown) {
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!projectChangeBtn.contains(e.target) && !projectChangeDropdown.contains(e.target)) {
+                projectChangeDropdown.style.display = 'none';
+            }
+        });
+    }
+
+    // Handle project search with create option
+    var projectSearchInput = document.getElementById('project-search-input');
+    var projectCreateForm = document.getElementById('project-create-form');
+    var projectCreateInput = document.getElementById('project-create-input');
+    if (projectSearchInput && projectCreateForm && projectCreateInput) {
+        projectSearchInput.addEventListener('input', function() {
+            var query = this.value.toLowerCase().trim();
+            var hasMatch = false;
+            var dropdown = document.getElementById('project-select-list');
+            
+            dropdown.querySelectorAll('.entity-option:not(.entity-create)').forEach(function(opt) {
+                var searchText = (opt.getAttribute('data-search') || '').toLowerCase();
+                if (searchText.includes(query)) {
+                    opt.classList.remove('hidden');
+                    if (searchText === query) hasMatch = true;
+                } else {
+                    opt.classList.add('hidden');
+                }
+            });
+            
+            // Show create form if query doesn't match exactly
+            if (query && !hasMatch) {
+                projectCreateForm.classList.remove('hidden');
+                projectCreateInput.value = projectSearchInput.value;
+            } else {
+                projectCreateForm.classList.add('hidden');
+            }
+        });
+    }
+</script>
+{% endblock %}

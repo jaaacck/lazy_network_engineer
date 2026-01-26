@@ -1,0 +1,816 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
+    {{ metadata.title }}
+</div>
+
+<div class="page-title">
+    <span>{% if metadata.seq_id %}<span class="seq-id">{{ metadata.seq_id }}</span>{% endif %}{{ metadata.title }}</span>
+    {% if not is_inbox_epic %}
+    <div class="mode-toggle">
+        <a href="{% url 'epic_detail' project=project epic=epic %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
+        <a href="{% url 'epic_detail' project=project epic=epic %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
+        <a href="{% url 'kanban_epic' project=project epic=epic %}">kanban</a>
+        {% if not metadata.archived %}
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="archive" value="1">
+            <button type="submit">Archive</button>
+        </form>
+        {% else %}
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="unarchive" value="1">
+            <button type="submit">Unarchive</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+{% if not is_inbox_epic %}
+<!-- Epic Overview -->
+<div class="task-overview">
+    <div class="overview-row overview-main">
+        <div class="overview-field">
+            <span class="field-label">Status</span>
+            <form method="post" class="field-value">
+                {% csrf_token %}
+                <input type="hidden" name="quick_update" value="status">
+                <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
+                    <option value="active" {% if metadata.status == 'active' %}selected{% endif %}>active</option>
+                    <option value="completed" {% if metadata.status == 'completed' %}selected{% endif %}>completed</option>
+                    <option value="canceled" {% if metadata.status == 'canceled' %}selected{% endif %}>canceled</option>
+                </select>
+            </form>
+        </div>
+        <div class="overview-field">
+            <span class="field-label">Priority</span>
+            <form method="post" class="field-value">
+                {% csrf_token %}
+                <input type="hidden" name="quick_update" value="priority">
+                <select name="priority" class="badge badge-priority priority-{{ metadata.priority|default:'none' }}" onchange="this.form.submit()">
+                    <option value="">None</option>
+                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>P1</option>
+                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>P2</option>
+                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>P3</option>
+                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>P4</option>
+                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>P5</option>
+                </select>
+            </form>
+        </div>
+        {% if total_tasks > 0 %}
+        <div class="overview-field overview-progress">
+            <span class="field-label">Progress</span>
+            <div class="field-value">
+                <div class="progress-inline">
+                    <div class="progress-bar" style="width: {{ progress_percentage }}%"></div>
+                </div>
+                <span class="progress-text">{{ progress_percentage|floatformat:0 }}%</span>
+            </div>
+        </div>
+        {% endif %}
+        <div class="overview-field overview-created">
+            <span class="field-label">Created</span>
+            <span class="field-value">{{ metadata.created }}</span>
+        </div>
+    </div>
+    
+    <div class="overview-row overview-dates">
+        <div class="overview-field">
+            <span class="field-label">Due</span>
+            <form method="post" class="field-value" id="due-date-form">
+                {% csrf_token %}
+                <input type="hidden" name="quick_update" value="due_date">
+                <input type="datetime-local" name="due_date" id="quick_due_date" value="{% if metadata.due_date and metadata.due_date|length == 10 %}{{ metadata.due_date }}T00:00{% else %}{{ metadata.due_date }}{% endif %}">
+            </form>
+        </div>
+    </div>
+    
+    <div class="overview-row overview-tags">
+        <div class="overview-field overview-field-wide">
+            <span class="field-label">Labels</span>
+            <div class="field-value tag-chips">
+                {% for label in labels %}
+                <span class="label-chip" style="background: {{ label.color }}20; border-color: {{ label.color }}; color: {{ label.color }};">
+                    <a href="{% url 'search' %}?q={{ label.name|urlencode }}">{{ label.name }}</a>
+                    <form method="post" class="chip-remove">{% csrf_token %}<input type="hidden" name="quick_update" value="remove_label"><input type="hidden" name="label" value="{{ label.name }}"><button type="submit">×</button></form>
+                </span>
+                {% endfor %}
+                <div class="searchable-select tag-select">
+                    <input type="text" class="tag-search" placeholder="+ Add" data-target="labels-list">
+                    <div class="tag-dropdown" id="labels-list">
+                        {% for lbl in all_labels %}
+                        {% if lbl not in labels_names %}
+                        <form method="post" class="tag-option" data-search="{{ lbl }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_label">
+                            <input type="hidden" name="label" value="{{ lbl }}">
+                            <button type="submit">{{ lbl }}</button>
+                        </form>
+                        {% endif %}
+                        {% endfor %}
+                        <form method="post" class="tag-option tag-create hidden" data-search="">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_label">
+                            <input type="hidden" name="label" value="" class="new-tag-value">
+                            <button type="submit">+ Create "<span class="new-tag-name"></span>"</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="overview-field overview-field-wide">
+            <span class="field-label">People</span>
+            <div class="field-value tag-chips">
+                {% for person in people %}
+                <span class="people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }};">
+                    {% if person.id %}<a href="{% url 'person_detail' person_id=person.id %}">{{ person.name }}</a>{% else %}{{ person.name }}{% endif %}
+                    <form method="post" class="chip-remove">{% csrf_token %}<input type="hidden" name="quick_update" value="remove_person"><input type="hidden" name="person" value="{{ person.name }}"><button type="submit">×</button></form>
+                </span>
+                {% endfor %}
+                <div class="searchable-select tag-select">
+                    <input type="text" class="tag-search" placeholder="+ Add" data-target="people-list">
+                    <div class="tag-dropdown" id="people-list">
+                        {% for p in all_people %}
+                        {% if p not in people_names %}
+                        <form method="post" class="tag-option" data-search="{{ p }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_person">
+                            <input type="hidden" name="person" value="{{ p }}">
+                            <button type="submit">{{ p }}</button>
+                        </form>
+                        {% endif %}
+                        {% endfor %}
+                        <form method="post" class="tag-option tag-create hidden" data-search="">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="add_person">
+                            <input type="hidden" name="person" value="" class="new-tag-value">
+                            <button type="submit">+ Create "<span class="new-tag-name"></span>"</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {% if content %}
+    <div class="overview-row overview-description">
+        <div class="overview-field overview-field-full">
+            <span class="field-label">Description</span>
+            <div class="field-value content">{{ content|markdownify|safe }}</div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if not edit_mode %}
+
+    {% if not is_inbox_epic %}
+    <!-- Checklist Section -->
+    <details class="section checklist-section">
+        <summary class="section-title">Checklist</summary>
+        {% if metadata.checklist %}
+            <div class="item-list">
+                {% for item in metadata.checklist %}
+                <div class="checklist-item {% if item.status == 'done' %}done{% endif %}">
+                    <form method="post" class="form-contents">
+                        {% csrf_token %}
+                        <input type="hidden" name="checklist_toggle_id" value="{{ item.id }}">
+                        <input type="checkbox" onchange="this.form.submit()" {% if item.status == 'done' %}checked{% endif %}>
+                    </form>
+                    <span class="checklist-title">{{ item.title }}</span>
+                    <div class="checklist-actions">
+                        <form method="post" class="form-inline">
+                            {% csrf_token %}
+                            <input type="hidden" name="checklist_delete_id" value="{{ item.id }}">
+                            <button type="submit" class="delete">delete</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty">No checklist items yet.</div>
+        {% endif %}
+
+        <form method="post" class="checklist-add">
+            {% csrf_token %}
+            <input type="text" name="checklist_add_title" placeholder="Add checklist item..." required>
+            <button type="submit">Add</button>
+        </form>
+    </details>
+    {% endif %}
+
+    <!-- Notes Section -->
+    <details class="section compact-section"{% if associated_notes %} open{% endif %}>
+        <summary class="section-title">Notes{% if associated_notes %} ({{ associated_notes|length }}){% endif %}</summary>
+        <div class="notes-section">
+            <div class="searchable-select note-select">
+                <input type="text" class="note-search" placeholder="Search notes to link..." data-target="notes-list">
+                <div class="note-dropdown" id="notes-list">
+                    {% for note in available_notes %}
+                    <form method="post" class="note-option" data-search="{{ note.title }}">
+                        {% csrf_token %}
+                        <input type="hidden" name="quick_update" value="add_note">
+                        <input type="hidden" name="note_id" value="{{ note.id }}">
+                        <button type="submit">{{ note.title }}</button>
+                    </form>
+                    {% empty %}
+                    <div class="empty-option">No notes available</div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% if associated_notes %}
+            <div class="notes-list">
+                {% for note in associated_notes %}
+                <div class="note-item">
+                    <div class="note-info">
+                        <a href="{% url 'note_detail' note_id=note.id %}">{{ note.title }}</a>
+                        {% if note.preview %}<span class="note-preview">{{ note.preview }}...</span>{% endif %}
+                    </div>
+                    <form method="post" class="note-remove">
+                        {% csrf_token %}
+                        <input type="hidden" name="quick_update" value="remove_note">
+                        <input type="hidden" name="note_id" value="{{ note.id }}">
+                        <button type="submit" class="delete-inline">×</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty">No notes linked yet.</div>
+            {% endif %}
+        </div>
+    </details>
+
+    <div class="section">
+        <div class="section-title">Tasks{% if not is_inbox_epic %} (<span id="tasks-count">{{ completed_tasks }}/{{ total_tasks }}</span>){% endif %}</div>
+        <form method="post" action="{% url 'new_task' project=project epic=epic %}" class="quick-setting-form ajax-create-form" id="new-task-form">
+            {% csrf_token %}
+            <label for="quick_task_title">Task</label>
+            <input type="text" name="title" id="quick_task_title" placeholder="Task title" required>
+            {% if not is_inbox_epic %}
+            <select name="priority">
+                <option value="">Priority</option>
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3">P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5</option>
+            </select>
+            <select name="status">
+                <option value="todo">todo</option>
+                <option value="in_progress">in progress</option>
+                <option value="done">done</option>
+            </select>
+            {% endif %}
+            <button type="submit">Create</button>
+        </form>
+
+        {% if not is_inbox_epic %}
+        <div class="progress" id="tasks-progress"{% if total_tasks == 0 %} style="display: none;"{% endif %}>
+            <div class="progress-bar" id="tasks-progress-bar" style="width: {{ progress_percentage }}%"></div>
+        </div>
+
+        <!-- Bulk Action Bar -->
+        <div class="bulk-action-bar" id="bulk-action-bar" style="display: none;">
+            <span class="bulk-count"><span id="selected-count">0</span> selected</span>
+            <select id="bulk-status">
+                <option value="">Set Status...</option>
+                <option value="todo">Todo</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+            </select>
+            <select id="bulk-priority">
+                <option value="">Set Priority...</option>
+                <option value="">None</option>
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3">P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5</option>
+            </select>
+            <button type="button" id="bulk-delete" class="btn-danger">Delete</button>
+            <button type="button" id="bulk-cancel" class="btn-secondary">Cancel</button>
+        </div>
+        {% endif %}
+
+        {% if is_inbox_epic %}
+        <!-- Simplified task list for inbox - just titles -->
+        <div class="item-list" id="tasks-list"{% if not tasks %} style="display: none;"{% endif %}>
+            {% for task in tasks %}
+            <div class="item">
+                <div class="item-title">
+                    <a href="{% url 'task_detail' project=project epic=epic task=task.id %}">{{ task.title }}</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <table id="tasks-table"{% if not tasks %} style="display: none;"{% endif %} class="sortable-table">
+            <thead>
+            <tr>
+                <th class="col-checkbox"><input type="checkbox" id="select-all-tasks" title="Select all"></th>
+                <th class="sortable" data-sort="status">Status <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="priority">Priority <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="title">Task <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="created">Created <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="due_date">Due Date <span class="sort-indicator">↕</span></th>
+            </tr>
+            </thead>
+            <tbody id="tasks-tbody">
+            {% for task in tasks %}
+            <tr class="draggable-row task-row" draggable="true" data-task-id="{{ task.id }}" 
+                data-status="{{ task.status }}" 
+                data-priority="{{ task.priority|default:'999' }}" 
+                data-title="{{ task.title|lower }}" 
+                data-created="{{ task.created|default:'9999-99-99' }}" 
+                data-due-date="{{ task.due_date|default:'9999-99-99' }}">
+                <td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="{{ task.id }}"></td>
+                <td><span class="badge badge-status status-{{ task.status }}">{{ task.status }}</span></td>
+                <td>{% if task.priority %}<span class="badge badge-priority priority-{{ task.priority }}">P{{ task.priority }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                <td>{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}<a href="{% url 'task_detail' project=project epic=epic task=task.id %}">{{ task.title }}</a></td>
+                <td>{% if task.created %}{{ task.created }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                <td>{% if task.due_date %}{{ task.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        <div id="tasks-empty" class="empty"{% if tasks %} style="display: none;"{% endif %}>No tasks yet.</div>
+    </div>
+
+{% else %}
+    <div class="section">
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label for="title">Title</label>
+                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="status">Status</label>
+                <select name="status" id="status">
+                    <option value="active" {% if metadata.status == 'active' %}selected{% endif %}>active</option>
+                    <option value="completed" {% if metadata.status == 'completed' %}selected{% endif %}>completed</option>
+                    <option value="canceled" {% if metadata.status == 'canceled' %}selected{% endif %}>canceled</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="priority">Priority</label>
+                <select name="priority" id="priority">
+                    <option value="">None</option>
+                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>1 (Highest)</option>
+                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>2</option>
+                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>3</option>
+                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>4</option>
+                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>5 (Lowest)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="content">Description (markdown)</label>
+                <textarea name="content" id="content">{{ content }}</textarea>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit">Save Changes</button>
+                <a href="{% url 'epic_detail' project=project epic=epic %}" class="button button-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // AJAX task creation
+    var taskForm = document.getElementById('new-task-form');
+    var totalTasks = {{ total_tasks }};
+    var completedTasks = {{ completed_tasks }};
+    
+    if (taskForm) {
+        taskForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(taskForm);
+            
+            fetch(taskForm.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Show table if hidden
+                    var table = document.getElementById('tasks-table');
+                    var tbody = document.getElementById('tasks-tbody');
+                    var empty = document.getElementById('tasks-empty');
+                    var progress = document.getElementById('tasks-progress');
+                    
+                    table.style.display = '';
+                    empty.style.display = 'none';
+                    progress.style.display = '';
+                    
+                    // Update task count
+                    totalTasks++;
+                    if (data.status === 'done') completedTasks++;
+                    document.getElementById('tasks-count').textContent = completedTasks + '/' + totalTasks;
+                    
+                    // Update progress bar
+                    var pct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+                    document.getElementById('tasks-progress-bar').style.width = pct + '%';
+                    
+                    // Create new row
+                    var tr = document.createElement('tr');
+                    tr.className = 'draggable-row task-row';
+                    tr.draggable = true;
+                    tr.setAttribute('data-task-id', data.id);
+                    tr.setAttribute('data-status', data.status);
+                    tr.setAttribute('data-priority', data.priority || '999');
+                    tr.setAttribute('data-title', data.title.toLowerCase());
+                    tr.setAttribute('data-created', data.created || '9999-99-99');
+                    tr.setAttribute('data-due-date', data.due_date || '9999-99-99');
+                    var seqIdHtml = data.seq_id ? '<span class="seq-id">' + data.seq_id + '</span>' : '';
+                    var priorityHtml = data.priority ? '<span class="badge badge-priority priority-' + data.priority + '">P' + data.priority + '</span>' : '<span class="text-muted">—</span>';
+                    var createdHtml = data.created || '<span class="text-muted">—</span>';
+                    var dueDateHtml = data.due_date || '<span class="text-muted">—</span>';
+                    tr.innerHTML = '<td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="' + data.id + '"></td>' +
+                        '<td><span class="badge badge-status status-' + data.status + '">' + data.status.replace('_', ' ') + '</span></td>' +
+                        '<td>' + priorityHtml + '</td>' +
+                        '<td>' + seqIdHtml + '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a></td>' +
+                        '<td>' + createdHtml + '</td>' +
+                        '<td>' + dueDateHtml + '</td>';
+                    tbody.appendChild(tr);
+                    
+                    // Add checkbox handler to new row
+                    tr.querySelector('.task-checkbox').addEventListener('change', updateBulkBar);
+                    
+                    // Add drag handlers to new row
+                    addDragHandlers(tr);
+                    
+                    // Reset form
+                    taskForm.reset();
+                    taskForm.querySelector('input[name="title"]').focus();
+                }
+            })
+            .catch(function(err) {
+                console.error('Error creating task:', err);
+            });
+        });
+    }
+    
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Drag-and-drop ordering for tasks
+    var draggedRow = null;
+    
+    function addDragHandlers(row) {
+        row.addEventListener('dragstart', function(e) {
+            draggedRow = row;
+            row.classList.add('dragging');
+        });
+
+        row.addEventListener('dragend', function() {
+            row.classList.remove('dragging');
+            draggedRow = null;
+        });
+
+        row.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (draggedRow && draggedRow !== row) {
+                var rect = row.getBoundingClientRect();
+                var next = (e.clientY - rect.top) > (rect.height / 2);
+                row.parentNode.insertBefore(draggedRow, next ? row.nextSibling : row);
+            }
+        });
+        
+        row.addEventListener('drop', function() {
+            persistTaskOrder();
+        });
+    }
+
+    document.querySelectorAll('.task-row').forEach(addDragHandlers);
+
+    function persistTaskOrder() {
+        var ids = Array.from(document.querySelectorAll('.task-row')).map(function(r) {
+            return r.getAttribute('data-task-id');
+        });
+        var formData = new FormData();
+        formData.append('type', 'task');
+        formData.append('project_id', '{{ project }}');
+        formData.append('epic_id', '{{ epic }}');
+        formData.append('order', ids.join(','));
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+        fetch('{% url "reorder_items" %}', { method: 'POST', body: formData });
+    }
+
+    // Bulk selection and actions
+    var bulkBar = document.getElementById('bulk-action-bar');
+    var selectAll = document.getElementById('select-all-tasks');
+    var selectedCount = document.getElementById('selected-count');
+    
+    function getSelectedIds() {
+        return Array.from(document.querySelectorAll('.task-checkbox:checked')).map(function(cb) {
+            return cb.value;
+        });
+    }
+    
+    function updateBulkBar() {
+        var selected = getSelectedIds();
+        selectedCount.textContent = selected.length;
+        bulkBar.style.display = selected.length > 0 ? 'flex' : 'none';
+        
+        // Update select all checkbox state
+        var allCheckboxes = document.querySelectorAll('.task-checkbox');
+        selectAll.checked = allCheckboxes.length > 0 && selected.length === allCheckboxes.length;
+        selectAll.indeterminate = selected.length > 0 && selected.length < allCheckboxes.length;
+    }
+    
+    // Select all checkbox
+    if (selectAll) {
+        selectAll.addEventListener('change', function() {
+            document.querySelectorAll('.task-checkbox').forEach(function(cb) {
+                cb.checked = selectAll.checked;
+            });
+            updateBulkBar();
+        });
+    }
+    
+    // Individual checkboxes
+    document.querySelectorAll('.task-checkbox').forEach(function(cb) {
+        cb.addEventListener('change', updateBulkBar);
+    });
+    
+    // Bulk status change
+    document.getElementById('bulk-status').addEventListener('change', function() {
+        var status = this.value;
+        if (!status) return;
+        
+        var ids = getSelectedIds();
+        if (ids.length === 0) return;
+        
+        var formData = new FormData();
+        formData.append('type', 'task');
+        formData.append('project_id', '{{ project }}');
+        formData.append('epic_id', '{{ epic }}');
+        formData.append('ids', ids.join(','));
+        formData.append('action', 'status');
+        formData.append('value', status);
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+        
+        fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    location.reload();
+                }
+            });
+    });
+    
+    // Bulk priority change
+    document.getElementById('bulk-priority').addEventListener('change', function() {
+        var priority = this.value;
+        var ids = getSelectedIds();
+        if (ids.length === 0) return;
+        
+        var formData = new FormData();
+        formData.append('type', 'task');
+        formData.append('project_id', '{{ project }}');
+        formData.append('epic_id', '{{ epic }}');
+        formData.append('ids', ids.join(','));
+        formData.append('action', 'priority');
+        formData.append('value', priority);
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+        
+        fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    location.reload();
+                }
+            });
+    });
+    
+    // Bulk delete
+    document.getElementById('bulk-delete').addEventListener('click', function() {
+        var ids = getSelectedIds();
+        if (ids.length === 0) return;
+        
+        if (!confirm('Delete ' + ids.length + ' task(s)? This cannot be undone.')) return;
+        
+        var formData = new FormData();
+        formData.append('type', 'task');
+        formData.append('project_id', '{{ project }}');
+        formData.append('epic_id', '{{ epic }}');
+        formData.append('ids', ids.join(','));
+        formData.append('action', 'delete');
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+        
+        fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    location.reload();
+                }
+            });
+    });
+    
+    // Cancel selection
+    document.getElementById('bulk-cancel').addEventListener('click', function() {
+        document.querySelectorAll('.task-checkbox').forEach(function(cb) {
+            cb.checked = false;
+        });
+        selectAll.checked = false;
+        updateBulkBar();
+    });
+
+    // Auto-submit due date form on change
+    var dueDateInput = document.getElementById('quick_due_date');
+    if (dueDateInput) {
+        dueDateInput.addEventListener('change', function() {
+            this.form.submit();
+        });
+    }
+
+    // Searchable tag dropdowns (labels and people)
+    document.querySelectorAll('.tag-search').forEach(function(input) {
+        var targetId = input.getAttribute('data-target');
+        var dropdown = document.getElementById(targetId);
+        var createOption = dropdown ? dropdown.querySelector('.tag-create') : null;
+        
+        if (!dropdown) return;
+        
+        input.addEventListener('input', function() {
+            var query = input.value.toLowerCase().trim();
+            var hasExactMatch = false;
+            var visibleOptions = 0;
+            
+            // Show/hide existing options
+            dropdown.querySelectorAll('.tag-option:not(.tag-create)').forEach(function(opt) {
+                var searchText = opt.getAttribute('data-search') || '';
+                searchText = searchText.toLowerCase();
+                if (query && searchText.includes(query)) {
+                    opt.classList.remove('hidden');
+                    visibleOptions++;
+                    if (searchText === query) hasExactMatch = true;
+                } else if (query) {
+                    opt.classList.add('hidden');
+                } else {
+                    // Show all when query is empty
+                    opt.classList.remove('hidden');
+                    visibleOptions++;
+                }
+            });
+            
+            // Show/hide create option
+            if (createOption) {
+                if (query && !hasExactMatch) {
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                } else if (query && visibleOptions === 0) {
+                    // Show create option if no matches found
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                } else {
+                    createOption.classList.add('hidden');
+                }
+            }
+        });
+        
+        input.addEventListener('focus', function() {
+            dropdown.style.display = 'block';
+            // Show create option if there's text and no exact match
+            if (createOption && input.value.trim()) {
+                var query = input.value.toLowerCase().trim();
+                var hasExactMatch = false;
+                dropdown.querySelectorAll('.tag-option:not(.tag-create)').forEach(function(opt) {
+                    var searchText = (opt.getAttribute('data-search') || '').toLowerCase();
+                    if (searchText === query) hasExactMatch = true;
+                });
+                if (!hasExactMatch) {
+                    createOption.classList.remove('hidden');
+                    var nameSpan = createOption.querySelector('.new-tag-name');
+                    var valueInput = createOption.querySelector('.new-tag-value');
+                    if (nameSpan) nameSpan.textContent = input.value;
+                    if (valueInput) valueInput.value = input.value;
+                }
+            }
+        });
+        
+        input.addEventListener('blur', function() {
+            setTimeout(function() {
+                dropdown.style.display = 'none';
+            }, 200);
+        });
+    });
+
+    // Searchable note dropdown
+    document.querySelectorAll('.note-search').forEach(function(input) {
+        var targetId = input.getAttribute('data-target');
+        var dropdown = document.getElementById(targetId);
+        
+        input.addEventListener('input', function() {
+            var query = input.value.toLowerCase();
+            dropdown.querySelectorAll('.note-option').forEach(function(opt) {
+                var searchText = opt.getAttribute('data-search').toLowerCase();
+                if (searchText.includes(query)) {
+                    opt.classList.remove('hidden');
+                } else {
+                    opt.classList.add('hidden');
+                }
+            });
+        });
+        
+        input.addEventListener('focus', function() {
+            dropdown.style.display = 'block';
+        });
+        
+        input.addEventListener('blur', function() {
+            setTimeout(function() {
+                dropdown.style.display = 'none';
+            }, 200);
+        });
+    });
+
+    // Table sorting
+    var sortDirection = {};
+    document.querySelectorAll('.sortable-table .sortable').forEach(function(header) {
+        header.style.cursor = 'pointer';
+        header.addEventListener('click', function() {
+            var column = this.getAttribute('data-sort');
+            var table = this.closest('table');
+            var tbody = table.querySelector('tbody');
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Toggle sort direction
+            if (!sortDirection[column]) {
+                sortDirection[column] = 'asc';
+            } else {
+                sortDirection[column] = sortDirection[column] === 'asc' ? 'desc' : 'asc';
+            }
+            
+            // Sort rows
+            rows.sort(function(a, b) {
+                var aVal = a.getAttribute('data-' + column) || '';
+                var bVal = b.getAttribute('data-' + column) || '';
+                
+                // Handle numeric values (priority)
+                if (column === 'priority') {
+                    aVal = parseInt(aVal) || 999;
+                    bVal = parseInt(bVal) || 999;
+                }
+                
+                // Handle date values
+                if (column === 'created' || column === 'due_date') {
+                    // Dates are already in YYYY-MM-DD format, so string comparison works
+                }
+                
+                // Handle text values (title)
+                if (column === 'title') {
+                    aVal = aVal.toLowerCase();
+                    bVal = bVal.toLowerCase();
+                }
+                
+                if (aVal < bVal) return sortDirection[column] === 'asc' ? -1 : 1;
+                if (aVal > bVal) return sortDirection[column] === 'asc' ? 1 : -1;
+                return 0;
+            });
+            
+            // Re-append sorted rows
+            rows.forEach(function(row) {
+                tbody.appendChild(row);
+            });
+            
+            // Update sort indicators
+            table.querySelectorAll('.sort-indicator').forEach(function(ind) {
+                ind.textContent = '↕';
+            });
+            var indicator = this.querySelector('.sort-indicator');
+            indicator.textContent = sortDirection[column] === 'asc' ? '↑' : '↓';
+        });
+    });
+</script>
+{% endblock %}

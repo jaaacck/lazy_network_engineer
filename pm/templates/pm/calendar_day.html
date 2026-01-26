@@ -1,0 +1,260 @@
+{% extends 'pm/base.html' %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'calendar' %}">calendar</a> &gt;
+    day view
+</div>
+
+<div class="page-title">
+    Calendar: {{ date|date:"l, F j, Y" }}
+</div>
+
+<div class="calendar-nav">
+    <a href="{% url 'calendar_day' date_str=prev_day %}" class="button">&lt; Previous Day</a>
+    <a href="{% url 'calendar' %}" class="button">Today</a>
+    <a href="{% url 'calendar_day' date_str=next_day %}" class="button">Next Day &gt;</a>
+    <span style="margin-left: 10px;"></span>
+    <a href="{% url 'calendar_week' year=year week=week %}" class="button">Week View</a>
+</div>
+
+<div class="calendar-controls">
+    <form method="post" id="calendar-preferences" class="tool-form-row">
+        {% csrf_token %}
+        <label for="timeframe" style="font-size: 9pt;">Timeframe:</label>
+        <select name="timeframe" id="timeframe" style="font-size: 9pt; padding: 2px;">
+            <option value="1" {% if timeframe == 1 %}selected{% endif %}>1hr</option>
+            <option value="2" {% if timeframe == 2 %}selected{% endif %}>2hrs</option>
+            <option value="8" {% if timeframe == 8 %}selected{% endif %}>8hrs</option>
+            <option value="12" {% if timeframe == 12 %}selected{% endif %}>12hrs</option>
+            <option value="24" {% if timeframe == 24 %}selected{% endif %}>24hrs</option>
+        </select>
+        
+        <label for="start_hour" style="font-size: 9pt; margin-left: 10px;">Start Time:</label>
+        <select name="start_hour" id="start_hour" style="font-size: 9pt; padding: 2px;">
+            {% for hour in all_hours %}
+                <option value="{{ hour }}" {% if start_hour == hour %}selected{% endif %}>
+                    {{ hour }}:00
+                </option>
+            {% endfor %}
+        </select>
+        
+        <label for="project_filter" style="font-size: 9pt; margin-left: 10px;">Filter Projects:</label>
+        <select name="project_filter" id="project_filter" multiple style="font-size: 9pt; padding: 2px; min-width: 150px;">
+            <option value="all" {% if project_filter == 'all' %}selected{% endif %}>All Projects</option>
+            {% for project in projects %}
+            <option value="{{ project.id }}" {% if project.id in selected_projects %}selected{% endif %}>
+                {{ project.title }}
+            </option>
+            {% endfor %}
+        </select>
+        
+        <button type="submit" style="font-size: 9pt; padding: 2px 8px; margin-left: 5px;">Apply</button>
+    </form>
+</div>
+
+<div class="calendar-layout">
+<div class="calendar-day-container">
+    <div class="time-column">
+        {% for hour in hours %}
+        <div class="hour-label">{{ hour }}:00</div>
+        {% endfor %}
+    </div>
+    <div class="grid-column">
+        {% for hour in hours %}
+        <div class="hour-row">
+            <div class="interval-line" style="top: 15px;"></div>
+            <div class="interval-line" style="top: 30px;"></div>
+            <div class="interval-line" style="top: 45px;"></div>
+        </div>
+        {% endfor %}
+        
+        {% for task in tasks %}
+        <div class="calendar-task draggable-task" 
+             draggable="true"
+             data-project-id="{{ task.project_id }}"
+             data-epic-id="{{ task.epic_id }}"
+             data-task-id="{{ task.id }}"
+             data-subtask-id=""
+             style="top: {{ task.top }}px; height: {{ task.height }}px; border-left-color: {{ task.project_color }}; border-color: {{ task.project_color }}; background: {{ task.project_color_bg }};">
+            <div class="task-time" style="color: {{ task.project_color }};">
+                {{ task.schedule_start|slice:"11:16" }}
+                {% if task.schedule_end %} - {{ task.schedule_end|slice:"11:16" }}{% endif %}
+            </div>
+            <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">
+                {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}{{ task.title }}
+            </a>
+            <div class="task-project">
+                {{ task.project_id }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="calendar-sidebar">
+    <div class="sidebar-title">Tasks & Subtasks</div>
+    <div class="sidebar-content">
+        {% for project in projects %}
+        <details class="project-group" open>
+            <summary class="project-header">{{ project.title }}</summary>
+            {% for epic in project.epics %}
+            <details class="epic-group">
+                <summary class="epic-header">{{ epic.title }}</summary>
+                {% for task in epic.tasks %}
+                <div class="task-item draggable-item" 
+                     draggable="true"
+                     data-project-id="{{ project.id }}"
+                     data-epic-id="{{ epic.id }}"
+                     data-task-id="{{ task.id }}"
+                     data-subtask-id="">
+                    <a href="{% url 'task_detail' project=project.id epic=epic.id task=task.id %}">{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}{{ task.title }}</a>
+                    {% if task.subtasks %}
+                    <details class="subtask-group">
+                        <summary class="subtask-header">Subtasks</summary>
+                        {% for subtask in task.subtasks %}
+                        <div class="subtask-item draggable-item"
+                             draggable="true"
+                             data-project-id="{{ project.id }}"
+                             data-epic-id="{{ epic.id }}"
+                             data-task-id="{{ task.id }}"
+                             data-subtask-id="{{ subtask.id }}">
+                            <a href="{% url 'subtask_detail' project=project.id epic=epic.id task=task.id subtask=subtask.id %}">{{ subtask.title }}</a>
+                        </div>
+                        {% endfor %}
+                    </details>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </details>
+            {% endfor %}
+        </details>
+        {% endfor %}
+    </div>
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-save preferences to cookies when changed
+    document.getElementById('timeframe').addEventListener('change', function() {
+        document.cookie = 'calendar_timeframe=' + this.value + '; max-age=31536000; path=/';
+        document.getElementById('calendar-preferences').submit();
+    });
+    
+    document.getElementById('start_hour').addEventListener('change', function() {
+        document.cookie = 'calendar_start_hour=' + this.value + '; max-age=31536000; path=/';
+        document.getElementById('calendar-preferences').submit();
+    });
+    
+    document.getElementById('project_filter').addEventListener('change', function() {
+        var selected = Array.from(this.selectedOptions).map(opt => opt.value);
+        if (selected.includes('all') || selected.length === 0) {
+            document.cookie = 'calendar_project_filter=all; max-age=31536000; path=/';
+        } else {
+            // Remove 'all' if other options are selected
+            selected = selected.filter(v => v !== 'all');
+            document.cookie = 'calendar_project_filter=' + selected.join(',') + '; max-age=31536000; path=/';
+        }
+        document.getElementById('calendar-preferences').submit();
+    });
+    
+    // Drag and Drop functionality
+    const gridColumn = document.querySelector('.grid-column');
+    const startHour = {{ start_hour }};
+    const dateStr = '{{ date|date:"Y-m-d" }}';
+    
+    // Make all draggable items work
+    document.querySelectorAll('.draggable-item, .draggable-task').forEach(item => {
+        item.addEventListener('dragstart', function(e) {
+            e.dataTransfer.setData('text/plain', JSON.stringify({
+                projectId: this.dataset.projectId,
+                epicId: this.dataset.epicId,
+                taskId: this.dataset.taskId,
+                subtaskId: this.dataset.subtaskId || ''
+            }));
+            this.style.opacity = '0.5';
+        });
+        
+        item.addEventListener('dragend', function(e) {
+            this.style.opacity = '1';
+        });
+    });
+    
+    // Handle drop on calendar grid
+    gridColumn.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    });
+    
+    gridColumn.addEventListener('drop', function(e) {
+        e.preventDefault();
+        
+        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        const rect = gridColumn.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        
+        // Calculate hour and minute from Y position, snap to 15-minute intervals
+        const snapInterval = 15; // minutes
+        const pixelsPerInterval = 15; // 15px per 15 minutes
+        
+        const totalMinutes = Math.max(0, Math.round((y / pixelsPerInterval)) * snapInterval);
+        const hoursFromStart = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        
+        let targetHour = startHour + hoursFromStart;
+        const targetMinute = minutes;
+        
+        // Clamp hour to valid range (0-23)
+        if (targetHour < 0) {
+            targetHour = 0;
+        } else if (targetHour >= 24) {
+            targetHour = 23;
+        }
+        
+        // Create datetime string
+        const scheduleStart = dateStr + 'T' + 
+            String(targetHour).padStart(2, '0') + ':' + 
+            String(targetMinute).padStart(2, '0');
+        
+        // Default to 1 hour duration
+        let endHour = targetHour + 1;
+        if (endHour >= 24) endHour = 23;
+        const scheduleEnd = dateStr + 'T' + 
+            String(endHour).padStart(2, '0') + ':' + 
+            String(targetMinute).padStart(2, '0');
+        
+        // Send AJAX request
+        const formData = new FormData();
+        formData.append('project_id', data.projectId);
+        formData.append('epic_id', data.epicId);
+        formData.append('task_id', data.taskId);
+        if (data.subtaskId) {
+            formData.append('subtask_id', data.subtaskId);
+        }
+        formData.append('schedule_start', scheduleStart);
+        formData.append('schedule_end', scheduleEnd);
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+        
+        fetch('{% url "update_task_schedule" %}', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Reload page to show updated schedule
+                window.location.reload();
+            } else {
+                alert('Error updating schedule: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error updating schedule');
+        });
+    });
+</script>
+{% endblock %}

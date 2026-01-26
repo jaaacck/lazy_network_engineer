@@ -1,0 +1,53 @@
+{% extends 'pm/base.html' %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
+    new epic
+</div>
+
+<div class="page-title">New Epic</div>
+
+<div class="section">
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="title">Title</label>
+            <input type="text" name="title" id="title" required autofocus>
+        </div>
+
+        <div class="form-group">
+            <label for="status">Status</label>
+            <select name="status" id="status">
+                <option value="active">active</option>
+                <option value="completed">completed</option>
+                <option value="canceled">canceled</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="priority">Priority</label>
+            <select name="priority" id="priority">
+                <option value="">None</option>
+                <option value="1">1 (Highest)</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5 (Lowest)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="content">Description (markdown)</label>
+            <textarea name="content" id="content"></textarea>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit">Create Epic</button>
+            <a href="{% url 'project_detail' project=project %}" class="button button-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./venv/bin/python manage.py migrate:*)",
+      "Bash(./venv/bin/python:*)",
+      "Bash(du:*)"
+    ]
+  }
+}

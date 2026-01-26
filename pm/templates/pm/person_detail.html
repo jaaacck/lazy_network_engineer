@@ -1,0 +1,204 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'people_list' %}">people</a> &gt;
+    @{{ person_name }}
+</div>
+
+<div class="page-title">@{{ person_name }}</div>
+
+{% if not edit_mode %}
+<div class="section">
+    <div class="section-title">
+        Person Information
+        <a href="?edit=true" class="button button-small" style="float: right;">Edit</a>
+    </div>
+    <div class="overview-section">
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>Name:</strong> {{ metadata.name|default:person_name }}
+            </div>
+        </div>
+        {% if metadata.job_title %}
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>Job Title:</strong> {{ metadata.job_title }}
+            </div>
+        </div>
+        {% endif %}
+        {% if metadata.company %}
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>Company:</strong> {{ metadata.company }}
+            </div>
+        </div>
+        {% endif %}
+        {% if metadata.email %}
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>Email:</strong> <a href="mailto:{{ metadata.email }}">{{ metadata.email }}</a>
+            </div>
+        </div>
+        {% endif %}
+        {% if metadata.phone %}
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>Phone:</strong> <a href="tel:{{ metadata.phone }}">{{ metadata.phone }}</a>
+            </div>
+        </div>
+        {% endif %}
+        <div class="overview-row">
+            <div class="overview-field">
+                <strong>First Created:</strong> 
+                {% if metadata.created %}
+                    {% if "T" in metadata.created %}
+                        {{ metadata.created|slice:":10" }} {{ metadata.created|slice:"11:19" }}
+                    {% else %}
+                        {{ metadata.created }}
+                    {% endif %}
+                {% else %}
+                    Not set
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="section">
+    <div class="section-title">Edit Person Information</div>
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="name">Name</label>
+            <input type="text" name="name" id="name" value="{{ metadata.name|default:person_name }}" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="job_title">Job Title</label>
+            <input type="text" name="job_title" id="job_title" value="{{ metadata.job_title|default:'' }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="company">Company</label>
+            <input type="text" name="company" id="company" value="{{ metadata.company|default:'' }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" name="email" id="email" value="{{ metadata.email|default:'' }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="phone">Phone Number</label>
+            <input type="tel" name="phone" id="phone" value="{{ metadata.phone|default:'' }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="created">First Created</label>
+            <input type="text" name="created" id="created" value="{{ metadata.created|default:'' }}" readonly style="background-color: #f0f0f0; cursor: not-allowed;">
+            <div style="font-size: 8pt; color: #828282; margin-top: 4px;">This field is automatically set and cannot be edited</div>
+        </div>
+        
+        <div class="form-actions">
+            <button type="submit">Save Changes</button>
+            <a href="{% url 'person_detail' person_id=person_id %}" class="button button-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+<div class="section">
+    <div class="section-title">All References ({{ total_refs }})</div>
+    
+    {% if projects %}
+    <details class="section" open>
+        <summary>Projects ({{ projects|length }})</summary>
+        <div class="item-list" style="margin-top: 10px;">
+            {% for project in projects %}
+            <div class="item">
+                <div class="item-title">
+                    <a href="{{ project.url }}">{{ project.title }}</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+    
+    {% if epics %}
+    <details class="section" {% if epics %}open{% endif %}>
+        <summary>Epics ({{ epics|length }})</summary>
+        <div class="item-list" style="margin-top: 10px;">
+            {% for epic in epics %}
+            <div class="item">
+                <div class="item-title">
+                    {% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}
+                    <a href="{{ epic.url }}">{{ epic.title }}</a>
+                </div>
+                <div class="item-meta">{{ epic.project_title }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+    
+    {% if tasks %}
+    <details class="section" {% if tasks %}open{% endif %}>
+        <summary>Tasks ({{ tasks|length }})</summary>
+        <div class="item-list" style="margin-top: 10px;">
+            {% for task in tasks %}
+            <div class="item">
+                <div class="item-title">
+                    {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}
+                    <a href="{{ task.url }}">{{ task.title }}</a>
+                </div>
+                <div class="item-meta">{{ task.epic_title }} &gt; {{ task.project_title }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+    
+    {% if subtasks %}
+    <details class="section" {% if subtasks %}open{% endif %}>
+        <summary>Subtasks ({{ subtasks|length }})</summary>
+        <div class="item-list" style="margin-top: 10px;">
+            {% for subtask in subtasks %}
+            <div class="item">
+                <div class="item-title">
+                    {% if subtask.seq_id %}<span class="seq-id">{{ subtask.seq_id }}</span>{% endif %}
+                    <a href="{{ subtask.url }}">{{ subtask.title }}</a>
+                </div>
+                <div class="item-meta">{{ subtask.task_title }} &gt; {{ subtask.epic_title }} &gt; {{ subtask.project_title }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+    
+    {% if notes %}
+    <details class="section" {% if notes %}open{% endif %}>
+        <summary>Notes ({{ notes|length }})</summary>
+        <div class="item-list" style="margin-top: 10px;">
+            {% for note in notes %}
+            <div class="item">
+                <div class="item-title">
+                    <a href="{{ note.url }}">{{ note.title }}</a>
+                </div>
+                <div class="item-meta">
+                    Created: {{ note.created }}{% if note.updated != note.created %} | Updated: {{ note.updated }}{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+    
+    {% if total_refs == 0 %}
+    <div class="empty">No references found for @{{ person_name }}.</div>
+    {% endif %}
+</div>
+{% endblock %}

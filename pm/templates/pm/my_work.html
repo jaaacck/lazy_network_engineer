@@ -1,0 +1,179 @@
+{% extends "pm/base.html" %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; my work
+</div>
+
+<div class="page-title">My Work</div>
+
+<details class="section filters-section">
+    <summary class="section-title">Filters</summary>
+    <form method="get" class="filters-form">
+        <div class="filters-row">
+            <div class="filter-item">
+                <label for="status">Status</label>
+                <select name="status" id="status">
+                    <option value="">All</option>
+                    <option value="todo" {% if filters.status == 'todo' %}selected{% endif %}>todo</option>
+                    <option value="in_progress" {% if filters.status == 'in_progress' %}selected{% endif %}>in progress</option>
+                    <option value="done" {% if filters.status == 'done' %}selected{% endif %}>done</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label for="priority">Priority</label>
+                <select name="priority" id="priority">
+                    <option value="">All</option>
+                    <option value="1" {% if filters.priority == '1' %}selected{% endif %}>P1</option>
+                    <option value="2" {% if filters.priority == '2' %}selected{% endif %}>P2</option>
+                    <option value="3" {% if filters.priority == '3' %}selected{% endif %}>P3</option>
+                    <option value="4" {% if filters.priority == '4' %}selected{% endif %}>P4</option>
+                    <option value="5" {% if filters.priority == '5' %}selected{% endif %}>P5</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label for="project">Project</label>
+                <select name="project" id="project">
+                    <option value="">All</option>
+                    {% for project in projects %}
+                    <option value="{{ project.id }}" {% if filters.project == project.id %}selected{% endif %}>{{ project.title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-item">
+                <label for="epic">Epic</label>
+                <select name="epic" id="epic">
+                    <option value="">All</option>
+                    {% for project in projects %}
+                        {% for epic in project.epics %}
+                        <option value="{{ epic.id }}" {% if filters.epic == epic.id %}selected{% endif %}>{{ epic.title }}</option>
+                        {% endfor %}
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-item">
+                <label for="due">Due</label>
+                <select name="due" id="due">
+                    <option value="">All</option>
+                    <option value="today" {% if filters.due == 'today' %}selected{% endif %}>Today</option>
+                    <option value="due_soon" {% if filters.due == 'due_soon' %}selected{% endif %}>Due soon</option>
+                    <option value="overdue" {% if filters.due == 'overdue' %}selected{% endif %}>Overdue</option>
+                    <option value="none" {% if filters.due == 'none' %}selected{% endif %}>No due date</option>
+                </select>
+            </div>
+            <div class="filter-actions">
+                <button type="submit">Apply</button>
+                <a href="{% url 'my_work' %}" class="button button-secondary">Reset</a>
+            </div>
+        </div>
+    </form>
+</details>
+
+<div class="section">
+    <div class="section-title">Open</div>
+    {% if open_items %}
+    <div class="item-list">
+        {% for item in open_items %}
+        <div class="item">
+            <div class="item-title">
+                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
+                {% if item.type == 'task' %}
+                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
+            </div>
+            {% if item.due_date %}
+            <div class="item-meta">Due: {{ item.due_date }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No open items.</div>
+    {% endif %}
+</div>
+
+<div class="section">
+    <div class="section-title">In Progress</div>
+    {% if in_progress %}
+    <div class="item-list">
+        {% for item in in_progress %}
+        <div class="item">
+            <div class="item-title">
+                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
+                {% if item.type == 'task' %}
+                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
+            </div>
+            {% if item.due_date %}
+            <div class="item-meta">Due: {{ item.due_date }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No items in progress.</div>
+    {% endif %}
+</div>
+
+<div class="section">
+    <div class="section-title">Due Soon (7 days)</div>
+    {% if due_soon %}
+    <div class="item-list">
+        {% for item in due_soon %}
+        <div class="item">
+            <div class="item-title">
+                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
+                {% if item.type == 'task' %}
+                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
+            </div>
+            {% if item.due_date %}
+            <div class="item-meta">Due: {{ item.due_date }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No items due soon.</div>
+    {% endif %}
+</div>
+
+<div class="section">
+    <div class="section-title">Overdue</div>
+    {% if overdue %}
+    <div class="item-list">
+        {% for item in overdue %}
+        <div class="item">
+            <div class="item-title">
+                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
+                {% if item.type == 'task' %}
+                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
+            </div>
+            {% if item.due_date %}
+            <div class="item-meta">Due: {{ item.due_date }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No overdue items.</div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends 'pm/base.html' %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'calendar' %}">calendar</a> &gt;
+    week view
+</div>
+
+<div class="page-title">
+    Calendar: Week {{ week }}, {{ year }}
+</div>
+
+<div class="calendar-nav">
+    <a href="{% url 'calendar_week' year=prev_year week=prev_week %}" class="button">&lt; Previous Week</a>
+    <a href="{% url 'calendar' %}" class="button">Today</a>
+    <a href="{% url 'calendar_week' year=next_year week=next_week %}" class="button">Next Week &gt;</a>
+    <span style="margin-left: 10px;"></span>
+    <a href="{% url 'calendar_day' date_str=today %}" class="button">Day View</a>
+</div>
+
+<div class="calendar-week-grid">
+    {% for day_info in week_data %}
+    <div class="week-day">
+        <div class="day-header {% if day_info.day|date:'Y-m-d' == today %}today{% endif %}">
+            <a href="{% url 'calendar_day' date_str=day_info.day|date:'Y-m-d' %}">
+                {{ day_info.day|date:"D" }}<br>
+                {{ day_info.day|date:"M j" }}
+            </a>
+        </div>
+        <div class="day-content">
+            {% for task in day_info.tasks %}
+            <div class="week-task status-{{ task.status }}" style="border-left-color: {{ task.project_color }}; background: {{ task.project_color_bg }};">
+                <div class="task-time" style="color: {{ task.project_color }};">{{ task.schedule_start|slice:"11:16" }}</div>
+                <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">
+                    {{ task.title }}
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}
