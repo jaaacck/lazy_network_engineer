@@ -1,5 +1,9 @@
 # Lazy Network Engineer
 
+101% Vibe Coded
+
+---
+
 A hierarchical project management system for network engineers, using markdown files with YAML frontmatter for data storage.
 
 ## Hierarchy
@@ -134,11 +138,3 @@ See `IMPROVEMENTS.md` for detailed production deployment guide.
 - **Markdown** - Text formatting
 - **Bleach** - HTML sanitization
 - **BeautifulSoup4** - HTML parsing
-
-## License
-
-[Your License Here]
-
-## Contributing
-
-[Contributing Guidelines Here]
