@@ -252,21 +252,45 @@ class IndexStorage:
     
     def _sync_updates(self, entity_id, updates_list):
         """Sync updates to updates table."""
+        # Build map of timestamp -> (type, activity_type) from existing Update table
+        # This preserves the original type/activity_type when re-syncing
+        update_map = {}
+        try:
+            stored_updates = Update.objects.filter(entity_id=entity_id).values('timestamp', 'type', 'activity_type')
+            for u in stored_updates:
+                update_map[u['timestamp']] = {
+                    'type': u['type'],
+                    'activity_type': u['activity_type']
+                }
+        except Exception as e:
+            logger.warning(f"Could not load stored update types for {entity_id}: {e}")
+        
         with connection.cursor() as cursor:
             # Delete existing updates
             cursor.execute("DELETE FROM updates WHERE entity_id = %s", [entity_id])
             
-            # Insert updates
+            # Insert updates, preserving stored types for existing updates
             for update in updates_list:
+                timestamp = update.get('timestamp', '')
+                
+                # Use stored type/activity_type if this update already existed
+                if timestamp and timestamp in update_map:
+                    update_type = update_map[timestamp]['type']
+                    activity_type = update_map[timestamp]['activity_type']
+                else:
+                    # For new updates, use the provided type or default to 'user'
+                    update_type = update.get('type', 'user')
+                    activity_type = update.get('activity_type', None)
+                
                 cursor.execute("""
                     INSERT INTO updates (entity_id, content, timestamp, type, activity_type)
                     VALUES (%s, %s, %s, %s, %s)
                 """, [
                     entity_id, 
                     update.get('content', ''), 
-                    update.get('timestamp', ''),
-                    update.get('type', 'user'),
-                    update.get('activity_type', None)
+                    timestamp,
+                    update_type,
+                    activity_type
                 ])
     
     def get_entity(self, entity_id):

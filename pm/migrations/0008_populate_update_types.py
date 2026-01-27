@@ -67,8 +67,11 @@ def populate_update_types(apps, schema_editor):
             continue
     
     print(f"✓ Processed {updated_count} updates")
-    print(f"✓ Matched {matched_count} updates with metadata ({matched_count/total_updates*100:.1f}%)")
-    print(f"✓ {total_updates - matched_count} updates defaulted to 'user' type\n")
+    if total_updates > 0:
+        print(f"✓ Matched {matched_count} updates with metadata ({matched_count/total_updates*100:.1f}%)")
+        print(f"✓ {total_updates - matched_count} updates defaulted to 'user' type\n")
+    else:
+        print(f"✓ No updates found to process\n")
 
 
 def reverse_populate(apps, schema_editor):
