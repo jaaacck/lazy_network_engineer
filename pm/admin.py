@@ -105,8 +105,8 @@ class EntityPersonAdmin(admin.ModelAdmin):
 
 @admin.register(Update)
 class UpdateAdmin(admin.ModelAdmin):
-    list_display = ('id', 'entity_id', 'timestamp', 'content_preview')
-    list_filter = ('timestamp',)
+    list_display = ('id', 'entity_id', 'type', 'activity_type', 'timestamp', 'content_preview')
+    list_filter = ('type', 'activity_type', 'timestamp')
     search_fields = ('entity_id', 'content')
     readonly_fields = ('id', 'timestamp')
     

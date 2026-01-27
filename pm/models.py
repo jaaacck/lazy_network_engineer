@@ -158,12 +158,15 @@ class Update(models.Model):
     entity_id = models.CharField(max_length=50)
     content = models.TextField()
     timestamp = models.CharField(max_length=50)
+    type = models.CharField(max_length=20, default='user', db_index=True)  # 'system' or 'user'
+    activity_type = models.CharField(max_length=50, blank=True, null=True)  # e.g., 'status_changed', 'label_added'
     
     class Meta:
         db_table = 'updates'
         indexes = [
             models.Index(fields=['entity_id']),
             models.Index(fields=['timestamp']),
+            models.Index(fields=['entity_id', 'activity_type']),  # For filtered queries
         ]
 
 

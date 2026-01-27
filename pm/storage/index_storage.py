@@ -259,9 +259,15 @@ class IndexStorage:
             # Insert updates
             for update in updates_list:
                 cursor.execute("""
-                    INSERT INTO updates (entity_id, content, timestamp)
-                    VALUES (%s, %s, %s)
-                """, [entity_id, update.get('content', ''), update.get('timestamp', '')])
+                    INSERT INTO updates (entity_id, content, timestamp, type, activity_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, [
+                    entity_id, 
+                    update.get('content', ''), 
+                    update.get('timestamp', ''),
+                    update.get('type', 'user'),
+                    update.get('activity_type', None)
+                ])
     
     def get_entity(self, entity_id):
         """Get entity from index."""

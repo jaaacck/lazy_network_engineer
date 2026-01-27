@@ -215,7 +215,7 @@
         {% if activity %}
         <div id="activity-list">
         {% for item in activity %}
-        <div class="update update-{{ item.update_type|default:'user' }}" data-update-type="{{ item.update_type|default:'user' }}">
+        <div class="update update-{{ item.update_type|default:'user' }}" data-update-type="{{ item.update_type|default:'user' }}" data-activity-type="{{ item.activity_type|default:'' }}">
             <div class="update-meta">
                 <span class="update-timestamp">{{ item.timestamp|date:"Y-m-d H:i" }}</span>
                 {% if item.update_type == 'system' %}
@@ -224,6 +224,7 @@
                 <span class="update-type-badge">user</span>
                 {% endif %}
                 <span class="update-meta-item">{{ item.entity_type|default:item.type }}</span>
+                {% if item.activity_type %}<span class="update-meta-item">{{ item.activity_type }}</span>{% endif %}
             </div>
             <div class="update-content content">
                 <a href="{{ item.url }}">{{ item.title }}</a>
