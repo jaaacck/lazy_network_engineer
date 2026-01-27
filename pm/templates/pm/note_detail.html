@@ -153,28 +153,51 @@
                 {% endif %}
             </div>
             
-            <!-- Epic Creation (only if project is set) -->
+            <!-- Epic Creation/Linking (only if project is set) -->
             {% if note_project %}
             <div class="creation-group">
                 <strong class="creation-label">Epics:</strong>
                 <div class="creation-controls">
-                    <form method="post" class="inline-create-form">
-                        {% csrf_token %}
-                        <input type="hidden" name="quick_update" value="create_epic_from_note">
-                        <input type="text" name="title" placeholder="Epic title..." required>
-                        <select name="priority">
-                            <option value="">Priority</option>
-                            <option value="1">P1</option>
-                            <option value="2">P2</option>
-                            <option value="3">P3</option>
-                            <option value="4">P4</option>
-                            <option value="5">P5</option>
-                        </select>
-                        <button type="submit">Create Epic</button>
-                    </form>
+                    <div class="creation-section">
+                        <strong style="display: block; margin-bottom: 8px; font-size: 0.9em;">Create New Epic</strong>
+                        <form method="post" class="inline-create-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="create_epic_from_note">
+                            <input type="text" name="title" placeholder="Epic title..." required>
+                            <select name="priority">
+                                <option value="">Priority</option>
+                                <option value="1">P1</option>
+                                <option value="2">P2</option>
+                                <option value="3">P3</option>
+                                <option value="4">P4</option>
+                                <option value="5">P5</option>
+                            </select>
+                            <button type="submit">Create Epic</button>
+                        </form>
+                    </div>
+                    {% if project_epics %}
+                    <div class="creation-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e0e0e0;">
+                        <strong style="display: block; margin-bottom: 8px; font-size: 0.9em;">Or Link Existing Epic</strong>
+                        <div class="searchable-select entity-select">
+                            <input type="text" class="entity-search" placeholder="Search for epic..." data-target="epic-select-list" id="epic-search-input">
+                            <div class="entity-dropdown" id="epic-select-list">
+                                {% for epic in project_epics %}
+                                <form method="post" class="entity-option" data-search="{{ epic.seq_id }} {{ epic.title }}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="quick_update" value="link_epic">
+                                    <input type="hidden" name="epic_id" value="{{ epic.id }}">
+                                    <input type="hidden" name="project_id" value="{{ note_project.id }}">
+                                    <button type="submit">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</button>
+                                </form>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
                 {% if note_epics %}
-                <div class="created-items">
+                <div class="created-items" style="margin-top: 12px;">
+                    <strong style="display: block; font-size: 0.9em; margin-bottom: 6px;">Created/Linked Epics:</strong>
                     {% for epic in note_epics %}
                     <div class="created-item">
                         {% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}
@@ -185,42 +208,66 @@
                 {% endif %}
             </div>
             
-            <!-- Task Creation (only if project is set) -->
+            <!-- Task Creation/Linking (only if project is set) -->
             <div class="creation-group">
                 <strong class="creation-label">Tasks:</strong>
                 <div class="creation-controls">
-                    <form method="post" class="inline-create-form">
-                        {% csrf_token %}
-                        <input type="hidden" name="quick_update" value="create_task_from_note">
-                        <input type="text" name="title" placeholder="Task title..." required>
-                        <select name="epic_id">
-                            <option value="">No Epic (Direct Task)</option>
-                            {% for epic in project_epics %}
-                            <option value="{{ epic.id }}">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</option>
-                            {% endfor %}
-                        </select>
-                        <select name="priority">
-                            <option value="">Priority</option>
-                            <option value="1">P1</option>
-                            <option value="2">P2</option>
-                            <option value="3">P3</option>
-                            <option value="4">P4</option>
-                            <option value="5">P5</option>
-                        </select>
-                        <select name="status">
-                            <option value="todo">Todo</option>
-                            <option value="in_progress">In Progress</option>
-                            <option value="done">Done</option>
-                            <option value="on_hold">On Hold</option>
-                            <option value="blocked">Blocked</option>
-                            <option value="cancelled">Cancelled</option>
-                            <option value="next">Next</option>
-                        </select>
-                        <button type="submit">Create Task</button>
-                    </form>
+                    <div class="creation-section">
+                        <strong style="display: block; margin-bottom: 8px; font-size: 0.9em;">Create New Task</strong>
+                        <form method="post" class="inline-create-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="quick_update" value="create_task_from_note">
+                            <input type="text" name="title" placeholder="Task title..." required>
+                            <select name="epic_id">
+                                <option value="">No Epic (Direct Task)</option>
+                                {% for epic in project_epics %}
+                                <option value="{{ epic.id }}">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</option>
+                                {% endfor %}
+                            </select>
+                            <select name="priority">
+                                <option value="">Priority</option>
+                                <option value="1">P1</option>
+                                <option value="2">P2</option>
+                                <option value="3">P3</option>
+                                <option value="4">P4</option>
+                                <option value="5">P5</option>
+                            </select>
+                            <select name="status">
+                                <option value="todo">Todo</option>
+                                <option value="in_progress">In Progress</option>
+                                <option value="done">Done</option>
+                                <option value="on_hold">On Hold</option>
+                                <option value="blocked">Blocked</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="next">Next</option>
+                            </select>
+                            <button type="submit">Create Task</button>
+                        </form>
+                    </div>
+                    {% if all_tasks_available %}
+                    <div class="creation-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e0e0e0;">
+                        <strong style="display: block; margin-bottom: 8px; font-size: 0.9em;">Or Link Existing Task</strong>
+                        <div class="searchable-select entity-select">
+                            <input type="text" class="entity-search" placeholder="Search for task..." data-target="task-select-list" id="task-search-input">
+                            <div class="entity-dropdown" id="task-select-list">
+                                {% for task in all_tasks_available %}
+                                <form method="post" class="entity-option" data-search="{{ task.seq_id }} {{ task.title }}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="quick_update" value="link_task">
+                                    <input type="hidden" name="task_id" value="{{ task.id }}">
+                                    <input type="hidden" name="epic_id" value="{{ task.epic_id }}">
+                                    <input type="hidden" name="project_id" value="{{ note_project.id }}">
+                                    <button type="submit">{% if task.seq_id %}{{ task.seq_id }} {% endif %}{{ task.title }}</button>
+                                </form>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
                 {% if note_tasks %}
-                <div class="created-items">
+                <div class="created-items" style="margin-top: 12px;">
+                    <strong style="display: block; font-size: 0.9em; margin-bottom: 6px;">Created/Linked Tasks:</strong>
                     {% for task in note_tasks %}
                     <div class="created-item">
                         <span class="item-meta">{{ task.epic_title }}:</span>

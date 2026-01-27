@@ -660,7 +660,18 @@ def _merge_people_from_entityperson(entity, metadata):
 
 def _build_metadata_from_entity(entity):
     """Build metadata dict from Entity database fields."""
-    metadata = {
+    import json
+    
+    # Start with fields from metadata_json if it exists (includes custom fields like note_project_id)
+    metadata = {}
+    if entity.metadata_json:
+        try:
+            metadata = json.loads(entity.metadata_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    # Build/override with Entity fields (these are the canonical values)
+    metadata.update({
         'id': entity.id,
         'title': entity.title,
         'status': entity.status or '',
@@ -684,7 +695,7 @@ def _build_metadata_from_entity(entity):
         'stats_updated': entity.stats_updated.isoformat() if entity.stats_updated else '',
         'updates': [{'timestamp': u.timestamp, 'content': u.content} 
                    for u in Update.objects.filter(entity_id=entity.id).order_by('timestamp')],
-    }
+    })
     # Add relationship fields based on entity type
     if entity.project_id:
         metadata['project_id'] = entity.project_id
@@ -4752,6 +4763,29 @@ def note_detail(request, note_id):
                 except Entity.DoesNotExist:
                     pass
     
+    # Get all tasks from the note project (for linking in the creation section)
+    all_tasks_available = []
+    if note_project_id:
+        tasks = Entity.objects.filter(type='task', project_id=note_project_id).exclude(id__in=note_task_ids)
+        for task in tasks:
+            # Find epic title
+            epic_title = 'Untitled Epic'
+            if task.epic_id:
+                try:
+                    epic = Entity.objects.get(id=task.epic_id, type='epic')
+                    epic_title = epic.title or 'Untitled Epic'
+                except Entity.DoesNotExist:
+                    pass
+            
+            all_tasks_available.append({
+                'id': task.id,
+                'epic_id': task.epic_id,
+                'epic_title': epic_title,
+                'title': task.title or 'Untitled Task',
+                'seq_id': task.seq_id or ''
+            })
+        all_tasks_available.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
+
     return render(request, 'pm/note_detail.html', {
         'metadata': metadata,
         'content': content,
@@ -4770,7 +4804,8 @@ def note_detail(request, note_id):
         'note_project': note_project,
         'note_epics': note_epics,
         'project_epics': project_epics,
-        'note_tasks': note_tasks
+        'note_tasks': note_tasks,
+        'all_tasks_available': all_tasks_available
     })
 
 
