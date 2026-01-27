@@ -11,13 +11,13 @@ admin.site.index_title = "Backend Management"
 
 @admin.register(Entity)
 class EntityAdmin(admin.ModelAdmin):
-    list_display = ('id', 'type', 'title', 'status', 'status_fk', 'priority', 'created', 'updated')
-    list_filter = ('type', 'status', 'status_fk', 'priority')
+    list_display = ('id', 'type', 'title', 'status_fk', 'priority', 'created', 'updated')
+    list_filter = ('type', 'status_fk', 'priority')
     search_fields = ('id', 'title', 'content')
     readonly_fields = ('id', 'created', 'updated', 'formatted_metadata')
     fieldsets = (
         ('Basic Information', {
-            'fields': ('id', 'type', 'title', 'status', 'status_fk', 'priority')
+            'fields': ('id', 'type', 'title', 'status_fk', 'priority')
         }),
         ('Relationships', {
             'fields': ('project_id', 'epic_id', 'task_id'),
@@ -53,7 +53,7 @@ class EntityAdmin(admin.ModelAdmin):
     
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.order_by('-updated', '-created')
+        return qs.select_related('status_fk').order_by('-updated', '-created')
 
 
 @admin.register(Status)

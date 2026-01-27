@@ -30,13 +30,9 @@
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
                 <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
-                    <option value="todo" {% if metadata.status == 'todo' %}selected{% endif %}>Todo</option>
-                    <option value="in_progress" {% if metadata.status == 'in_progress' %}selected{% endif %}>In Progress</option>
-                    <option value="done" {% if metadata.status == 'done' %}selected{% endif %}>Done</option>
-                    <option value="on_hold" {% if metadata.status == 'on_hold' %}selected{% endif %}>On Hold</option>
-                    <option value="blocked" {% if metadata.status == 'blocked' %}selected{% endif %}>Blocked</option>
-                    <option value="cancelled" {% if metadata.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
-                    <option value="next" {% if metadata.status == 'next' %}selected{% endif %}>Next</option>
+                    {% for status in all_statuses %}
+                    <option value="{{ status.name }}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
+                    {% endfor %}
                 </select>
             </form>
         </div>

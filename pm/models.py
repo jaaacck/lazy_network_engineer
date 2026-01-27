@@ -65,9 +65,8 @@ class Entity(models.Model):
     id = models.CharField(max_length=50, primary_key=True)
     type = models.CharField(max_length=20)  # 'project', 'epic', 'task', 'subtask', 'note'
     title = models.CharField(max_length=500)
-    # Status: keep old field for migration, add new ForeignKey
-    status = models.CharField(max_length=50, blank=True)  # Old field, kept for migration
-    status_fk = models.ForeignKey(Status, null=True, blank=True, on_delete=models.SET_NULL, related_name='entities')
+    # Status: now exclusively using ForeignKey to Status model
+    status_fk = models.ForeignKey(Status, on_delete=models.PROTECT, related_name='entities', null=False)
     priority = models.IntegerField(null=True, blank=True)
     created = models.CharField(max_length=50, blank=True)
     updated = models.CharField(max_length=50, blank=True)
@@ -105,7 +104,6 @@ class Entity(models.Model):
         db_table = 'entities'
         indexes = [
             models.Index(fields=['type']),
-            models.Index(fields=['status']),
             models.Index(fields=['status_fk']),
             models.Index(fields=['due_date']),
             models.Index(fields=['due_date_dt']),

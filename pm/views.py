@@ -658,6 +658,35 @@ def _merge_people_from_entityperson(entity, metadata):
     return metadata
 
 
+
+
+def get_status_display(entity):
+    """Get display name for entity status.
+    
+    Always use status_fk (foreign key to Status table).
+    """
+    if entity.status_fk:
+        return entity.status_fk.display_name
+    # Should not happen with NOT NULL constraint
+    logger.error(f"Entity {entity.id} has no status_fk set")
+    return 'Unknown'
+
+
+def get_status_for_entity_type(entity_type):
+    """Get all active statuses for a given entity type.
+    
+    Returns a list of Status objects applicable to this entity type.
+    Used for populating status dropdowns in templates.
+    """
+    from django.db.models import Q
+    statuses = Status.objects.filter(
+        is_active=True
+    ).filter(
+        Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
+    ).order_by('order', 'name')
+    return statuses
+
+
 def _build_metadata_from_entity(entity):
     """Build metadata dict from Entity database fields."""
     import json
@@ -674,7 +703,7 @@ def _build_metadata_from_entity(entity):
     metadata.update({
         'id': entity.id,
         'title': entity.title,
-        'status': entity.status or '',
+        'status': entity.status_fk.name if entity.status_fk else '',
         'priority': entity.priority,
         'created': entity.created or '',
         'updated': entity.updated or '',
@@ -706,11 +735,6 @@ def _build_metadata_from_entity(entity):
     return metadata
 
 
-def _status_display_fallback(status_name):
-    """Resolve display name from Status table when entity.status_fk is null."""
-    s = Status.objects.filter(name=status_name, is_active=True).first()
-    return s.display_name if s else (status_name or '').replace('_', ' ').title()
-
 
 def load_project(project_id, metadata_only=False):
     """Load a project from database."""
@@ -723,7 +747,7 @@ def load_project(project_id, metadata_only=False):
         # Build metadata from Entity fields
         metadata = _build_metadata_from_entity(entity)
         metadata = _merge_people_from_entityperson(entity, metadata)
-        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
     except Entity.DoesNotExist:
@@ -765,7 +789,7 @@ def load_epic(project_id, epic_id, metadata_only=False):
         if 'project_id' not in metadata:
             metadata['project_id'] = project_id
         metadata = _merge_people_from_entityperson(entity, metadata)
-        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
     except Entity.DoesNotExist:
@@ -827,7 +851,7 @@ def load_task(project_id, task_id, epic_id=None, metadata_only=False):
         elif not epic_id and 'epic_id' in metadata:
             metadata.pop('epic_id', None)
         metadata = _merge_people_from_entityperson(entity, metadata)
-        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
     except Entity.DoesNotExist:
@@ -907,7 +931,7 @@ def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=Fa
         if 'task_id' not in metadata:
             metadata['task_id'] = task_id
         metadata = _merge_people_from_entityperson(entity, metadata)
-        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
     except Entity.DoesNotExist:
@@ -966,12 +990,12 @@ def compute_project_stats(project_id):
     # Count tasks (with and without epic)
     tasks = Entity.objects.filter(type='task', project_id=project_id)
     tasks_count = tasks.count()
-    done_tasks_count = tasks.filter(status='done').count()
+    done_tasks_count = tasks.filter(status_fk__name='done').count()
     
     # Count subtasks
     subtasks = Entity.objects.filter(type='subtask', project_id=project_id)
     subtasks_count = subtasks.count()
-    done_subtasks_count = subtasks.filter(status='done').count()
+    done_subtasks_count = subtasks.filter(status_fk__name='done').count()
 
     completion_percentage = int((done_tasks_count / tasks_count) * 100) if tasks_count > 0 else 0
 
@@ -1118,12 +1142,12 @@ def project_list(request):
             metadata['stats_updated'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
             save_project(entity.id, metadata, entity.content)
 
-        status_name = entity.status or 'active'
+        status_name = entity.status_fk.name if entity.status_fk else 'active'
         projects.append({
             'id': entity.id,
             'title': entity.title or 'Untitled Project',
             'status': status_name,
-            'status_display': entity.status_fk.display_name if entity.status_fk else _status_display_fallback(status_name or entity.status),
+            'status_display': get_status_display(entity),
             'archived': is_archived,
             'epics_count': stats.get('epics_count', 0),
             'tasks_count': stats.get('tasks_count', 0),
@@ -1239,12 +1263,12 @@ def project_detail(request, project):
         for task_entity in task_entities:
             task_metadata = _build_metadata_from_entity(task_entity)
             
-            status_name = task_entity.status or task_metadata.get('status', 'todo')
+            status_name = task_entity.status_fk.name if task_entity.status_fk else task_metadata.get('status', 'todo')
             task_data = {
                 'id': task_entity.id,
                 'title': task_entity.title or task_metadata.get('title', 'Untitled Task'),
                 'status': status_name,
-                'status_display': task_entity.status_fk.display_name if task_entity.status_fk else _status_display_fallback(status_name or task_entity.status),
+                'status_display': get_status_display(task_entity),
                 'schedule_start': task_entity.schedule_start or task_metadata.get('schedule_start', ''),
                 'schedule_end': task_entity.schedule_end or task_metadata.get('schedule_end', '')
             }
@@ -1258,13 +1282,13 @@ def project_detail(request, project):
                 for subtask_entity in subtask_entities:
                     subtask_metadata = _build_metadata_from_entity(subtask_entity)
                     
-                    subtask_status = subtask_entity.status or subtask_metadata.get('status', 'todo')
+                    subtask_status = subtask_entity.status_fk.name if subtask_entity.status_fk else subtask_metadata.get('status', 'todo')
                     if subtask_status in ['todo', 'in_progress']:
                         open_subtasks.append({
                             'id': subtask_entity.id,
                             'title': subtask_entity.title or subtask_metadata.get('title', 'Untitled Subtask'),
                             'status': subtask_status,
-                            'status_display': subtask_entity.status_fk.display_name if subtask_entity.status_fk else _status_display_fallback(subtask_status or subtask_entity.status)
+                            'status_display': get_status_display(subtask_entity)
                         })
                 
                 open_task_data = task_data.copy()
@@ -1276,12 +1300,12 @@ def project_detail(request, project):
         completed_tasks_count = sum(1 for t in tasks if t['status'] == 'done')
         progress_pct = (completed_tasks_count / total_tasks_count * 100) if total_tasks_count > 0 else 0
 
-        epic_status = epic_entity.status or epic_metadata.get('status', 'active')
+        epic_status = epic_entity.status_fk.name if epic_entity.status_fk else epic_metadata.get('status', 'active')
         epic_data = {
             'id': epic_entity.id,
             'title': epic_entity.title or epic_metadata.get('title', 'Untitled Epic'),
             'status': epic_status,
-            'status_display': epic_entity.status_fk.display_name if epic_entity.status_fk else _status_display_fallback(epic_status or epic_entity.status),
+            'status_display': get_status_display(epic_entity),
             'seq_id': epic_entity.seq_id or epic_metadata.get('seq_id', ''),
             'tasks': tasks,
             'completed_tasks': completed_tasks_count,
@@ -1313,12 +1337,12 @@ def project_detail(request, project):
     for task_entity in direct_task_entities:
         task_metadata = _build_metadata_from_entity(task_entity)
         
-        task_status = task_entity.status or task_metadata.get('status', 'todo')
+        task_status = task_entity.status_fk.name if task_entity.status_fk else task_metadata.get('status', 'todo')
         task_data = {
             'id': task_entity.id,
             'title': task_entity.title or task_metadata.get('title', 'Untitled Task'),
             'status': task_status,
-            'status_display': task_entity.status_fk.display_name if task_entity.status_fk else _status_display_fallback(task_status or task_entity.status),
+            'status_display': get_status_display(task_entity),
             'seq_id': task_entity.seq_id or task_metadata.get('seq_id', ''),
             'priority': task_entity.priority or task_metadata.get('priority', ''),
             'created': task_entity.created or task_metadata.get('created', ''),
@@ -1336,13 +1360,13 @@ def project_detail(request, project):
             for subtask_entity in subtask_entities:
                 subtask_metadata = _build_metadata_from_entity(subtask_entity)
                 
-                subtask_status = subtask_entity.status or subtask_metadata.get('status', 'todo')
+                subtask_status = subtask_entity.status_fk.name if subtask_entity.status_fk else subtask_metadata.get('status', 'todo')
                 if subtask_status in ['todo', 'in_progress']:
                     open_subtasks.append({
                         'id': subtask_entity.id,
                         'title': subtask_entity.title or subtask_metadata.get('title', 'Untitled Subtask'),
                         'status': subtask_status,
-                        'status_display': subtask_entity.status_fk.display_name if subtask_entity.status_fk else _status_display_fallback(subtask_status or subtask_entity.status)
+                        'status_display': get_status_display(subtask_entity)
                     })
             
             open_task_data = task_data.copy()
@@ -1460,12 +1484,12 @@ def epic_detail(request, project, epic):
     tasks = []
     for entity in task_entities:
         task_metadata = _build_metadata_from_entity(entity)
-        task_status = entity.status or task_metadata.get('status', 'todo')
+        task_status = entity.status_fk.name if entity.status_fk else task_metadata.get('status', 'todo')
         tasks.append({
             'id': entity.id,
             'title': entity.title or task_metadata.get('title', 'Untitled Task'),
             'status': task_status,
-            'status_display': entity.status_fk.display_name if entity.status_fk else _status_display_fallback(task_status or entity.status),
+            'status_display': get_status_display(entity),
             'seq_id': entity.seq_id or task_metadata.get('seq_id', ''),
             'priority': entity.priority or task_metadata.get('priority', ''),
             'created': entity.created or task_metadata.get('created', ''),
@@ -1694,6 +1718,7 @@ def epic_detail(request, project, epic):
         'people_names': people_names,
         'all_labels': all_labels,
         'all_people': all_people,  # This is now get_all_people_names_in_system() result
+        'all_statuses': get_status_for_entity_type('task'),
         'associated_notes': associated_notes,
         'available_notes': available_notes,
         'is_inbox_epic': is_inbox_epic
@@ -1899,7 +1924,7 @@ def _task_detail_impl(request, project, task, epic=None):
             'id': entity.id,
             'seq_id': entity.seq_id or '',
             'title': entity.title or 'Untitled Subtask',
-            'status': entity.status or 'todo',
+            'status': entity.status_fk.name if entity.status_fk else 'todo',
             'priority': entity.priority or '',
             'created': entity.created or '',
             'due_date': entity.due_date or '',
@@ -2261,6 +2286,8 @@ def _task_detail_impl(request, project, task, epic=None):
         'people_names': people_list,
         'all_labels': get_all_labels_in_system(),
         'all_people': get_all_people_names_in_system(),
+        'all_statuses': get_status_for_entity_type('task'),
+        'all_subtask_statuses': get_status_for_entity_type('subtask'),
         'blocks': blocks,
         'blocked_by': blocked_by,
         'available_tasks': available_tasks,
@@ -2798,6 +2825,7 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
         'people_names': people_list,
         'all_labels': get_all_labels_in_system(),
         'all_people': get_all_people_names_in_system(),
+        'all_statuses': get_status_for_entity_type('subtask'),
         'blocks': blocks,
         'blocked_by': blocked_by,
         'available_tasks': available_tasks,
@@ -2833,7 +2861,7 @@ def get_all_scheduled_tasks():
             except Entity.DoesNotExist:
                 project_color = get_project_color(task.project_id, None)
                     
-            task_status = task.status or 'todo'
+            task_status = task.status_fk.name if task.status_fk else 'todo'
             scheduled_tasks.append({
                 'id': task.id,
                 'project_id': task.project_id,
@@ -2841,7 +2869,7 @@ def get_all_scheduled_tasks():
                 'title': task.title or 'Untitled Task',
                 'seq_id': task.seq_id or '',
                 'status': task_status,
-                'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                'status_display': get_status_display(task),
                 'schedule_start': task.schedule_start or '',
                 'schedule_end': task.schedule_end or '',
                 'project_color': project_color,
@@ -2886,7 +2914,7 @@ def get_all_projects_hierarchy():
                     'id': task.id,
                     'title': task.title or 'Untitled Task',
                     'seq_id': task.seq_id or '',
-                    'status': task.status or 'todo',
+                    'status': task.status_fk.name if task.status_fk else 'todo',
                     'subtasks': []
                 }
                 
@@ -2896,7 +2924,7 @@ def get_all_projects_hierarchy():
                     task_data['subtasks'].append({
                         'id': subtask.id,
                         'title': subtask.title or 'Untitled Subtask',
-                        'status': subtask.status or 'todo'
+                        'status': subtask.status_fk.name if subtask.status_fk else 'todo'
                     })
                 
                 epic_data['tasks'].append(task_data)
@@ -2911,7 +2939,7 @@ def get_all_projects_hierarchy():
                 'id': task.id,
                 'title': task.title or 'Untitled Task',
                 'seq_id': task.seq_id or '',
-                'status': task.status or 'todo',
+                'status': task.status_fk.name if task.status_fk else 'todo',
                 'subtasks': []
             }
             
@@ -2921,7 +2949,7 @@ def get_all_projects_hierarchy():
                 task_data['subtasks'].append({
                     'id': subtask.id,
                     'title': subtask.title or 'Untitled Subtask',
-                    'status': subtask.status or 'todo'
+                    'status': subtask.status_fk.name if subtask.status_fk else 'todo'
                 })
             
             direct_tasks.append(task_data)
@@ -2969,7 +2997,7 @@ def get_all_work_items():
             'type': 'task',
             'id': task.id,
             'title': task.title or 'Untitled Task',
-            'status': task.status or 'todo',
+            'status': task.status_fk.name if task.status_fk else 'todo',
             'priority': task.priority or '',
             'due_date': task.due_date or '',
             'project_id': task.project_id,
@@ -2984,7 +3012,7 @@ def get_all_work_items():
             'id': subtask.id,
             'seq_id': subtask.seq_id or '',
             'title': subtask.title or 'Untitled Subtask',
-            'status': subtask.status or 'todo',
+            'status': subtask.status_fk.name if subtask.status_fk else 'todo',
             'priority': subtask.priority or '',
             'due_date': subtask.due_date or '',
             'project_id': subtask.project_id,
@@ -3102,7 +3130,7 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
         if exclude_task_id and task.id == exclude_task_id:
             continue
         
-        task_status = task.status or 'todo'
+        task_status = task.status_fk.name if task.status_fk else 'todo'
         tasks_list.append({
             'type': 'task',
             'id': task.id,
@@ -3111,7 +3139,7 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
             'seq_id': task.seq_id or '',
             'title': task.title or 'Untitled Task',
             'status': task_status,
-            'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+            'status_display': get_status_display(task),
             'priority': task.priority or ''
         })
         
@@ -3124,7 +3152,7 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
             if exclude_subtask_id and subtask.id == exclude_subtask_id:
                 continue
             
-            subtask_status = subtask.status or 'todo'
+            subtask_status = subtask.status_fk.name if subtask.status_fk else 'todo'
             tasks_list.append({
                 'type': 'subtask',
                 'id': subtask.id,
@@ -3136,7 +3164,7 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
                 'epic_title': epic_titles.get(subtask.epic_id, 'Untitled Epic') if subtask.epic_id else None,
                 'title': subtask.title or 'Untitled Subtask',
                 'status': subtask_status,
-                'status_display': subtask.status_fk.display_name if subtask.status_fk else _status_display_fallback(subtask_status or subtask.status),
+                'status_display': get_status_display(subtask),
                 'priority': subtask.priority or ''
             })
     
@@ -3878,13 +3906,13 @@ def kanban_view(request, project=None, epic=None):
         tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic)
         for task in tasks:
             if not task.archived:
-                task_status = task.status or 'todo'
+                task_status = task.status_fk.name if task.status_fk else 'todo'
                 items.append({
                     'type': 'task',
                     'id': task.id,
                     'title': task.title or 'Untitled Task',
                     'status': task_status,
-                    'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                    'status_display': get_status_display(task),
                     'priority': task.priority or '',
                     'project_id': project,
                     'epic_id': epic,
@@ -3918,13 +3946,13 @@ def kanban_view(request, project=None, epic=None):
             tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic_entity.id)
             for task in tasks:
                 if not task.archived:
-                    task_status = task.status or 'todo'
+                    task_status = task.status_fk.name if task.status_fk else 'todo'
                     items.append({
                         'type': 'task',
                         'id': task.id,
                         'title': task.title or 'Untitled Task',
                         'status': task_status,
-                        'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                        'status_display': get_status_display(task),
                         'priority': task.priority or '',
                         'project_id': project,
                         'epic_id': epic_entity.id,
@@ -4360,7 +4388,7 @@ def load_note(note_id, metadata_only=False):
         # Build metadata from Entity fields
         metadata = _build_metadata_from_entity(entity)
         metadata = _merge_people_from_entityperson(entity, metadata)
-        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
     except Entity.DoesNotExist:

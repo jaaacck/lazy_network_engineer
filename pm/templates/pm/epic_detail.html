@@ -41,9 +41,9 @@
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
                 <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
-                    <option value="active" {% if metadata.status == 'active' %}selected{% endif %}>active</option>
-                    <option value="completed" {% if metadata.status == 'completed' %}selected{% endif %}>completed</option>
-                    <option value="canceled" {% if metadata.status == 'canceled' %}selected{% endif %}>canceled</option>
+                    {% for status in all_statuses %}
+                    <option value="{{ status.name }}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
+                    {% endfor %}
                 </select>
             </form>
         </div>
@@ -270,13 +270,9 @@
                 <option value="5">P5</option>
             </select>
             <select name="status">
-                <option value="todo">Todo</option>
-                <option value="in_progress">In Progress</option>
-                <option value="done">Done</option>
-                <option value="on_hold">On Hold</option>
-                <option value="blocked">Blocked</option>
-                <option value="cancelled">Cancelled</option>
-                <option value="next">Next</option>
+                {% for status in all_statuses %}
+                <option value="{{ status.name }}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
             {% endif %}
             <button type="submit">Create</button>
@@ -292,13 +288,9 @@
             <span class="bulk-count"><span id="selected-count">0</span> selected</span>
             <select id="bulk-status">
                 <option value="">Set Status...</option>
-                <option value="todo">Todo</option>
-                <option value="in_progress">In Progress</option>
-                <option value="done">Done</option>
-                <option value="on_hold">On Hold</option>
-                <option value="blocked">Blocked</option>
-                <option value="cancelled">Cancelled</option>
-                <option value="next">Next</option>
+                {% for status in all_statuses %}
+                <option value="{{ status.name }}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
             <select id="bulk-priority">
                 <option value="">Set Priority...</option>

@@ -35,16 +35,15 @@ class IndexStorage:
                     'id': entity_id,
                     'type': entity_type,
                     'title': metadata.get('title', 'Untitled'),
-                    'status': metadata.get('status', ''),  # Keep old field for backward compatibility
                     'priority': metadata.get('priority'),
                     'created': metadata.get('created', ''),
                     'updated': metadata.get('updated', ''),
-                    'due_date': metadata.get('due_date', ''),  # Keep old field for backward compatibility
-                    'schedule_start': metadata.get('schedule_start', ''),  # Keep old field for backward compatibility
-                    'schedule_end': metadata.get('schedule_end', ''),  # Keep old field for backward compatibility
+                    'due_date': metadata.get('due_date', ''),
+                    'schedule_start': metadata.get('schedule_start', ''),
+                    'schedule_end': metadata.get('schedule_end', ''),
                     'content': content or '',
-                    'metadata_json': json.dumps(metadata),  # Keep for backward compatibility
-                    # New extracted metadata fields
+                    'metadata_json': json.dumps(metadata),
+                    # Extracted metadata fields
                     'seq_id': metadata.get('seq_id', '') or None,
                     'archived': metadata.get('archived', False),
                     'is_inbox_epic': metadata.get('is_inbox_epic', False),
@@ -68,22 +67,29 @@ class IndexStorage:
                     except (ValueError, TypeError):
                         pass
                 
-                # Set Status ForeignKey if status is provided
+                # Set Status ForeignKey - REQUIRED (no fallback to string status)
                 status_name = metadata.get('status', '')
-                if status_name:
-                    try:
-                        # Find status that applies to this entity type
-                        status_obj = Status.objects.filter(
-                            name=status_name,
-                            is_active=True
-                        ).filter(
-                            Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
-                        ).first()
-                        
-                        if status_obj:
-                            entity_data['status_fk'] = status_obj
-                    except Exception as e:
-                        logger.warning(f"Could not find status '{status_name}' for entity type '{entity_type}': {e}")
+                if not status_name:
+                    logger.error(f"No status provided for entity {entity_id}")
+                    raise Exception(f"Status is required for entity {entity_id}")
+                
+                try:
+                    # Find status that applies to this entity type
+                    status_obj = Status.objects.filter(
+                        name=status_name,
+                        is_active=True
+                    ).filter(
+                        Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
+                    ).first()
+                    
+                    if not status_obj:
+                        logger.error(f"Could not find active status '{status_name}' for entity type '{entity_type}'")
+                        raise Exception(f"Status '{status_name}' not found for entity type '{entity_type}'")
+                    
+                    entity_data['status_fk'] = status_obj
+                except Exception as e:
+                    logger.error(f"Status lookup failed for entity {entity_id}: {e}")
+                    raise
                 
                 # Parse and set date fields
                 if metadata.get('due_date'):
