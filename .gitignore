@@ -54,7 +54,8 @@ data/projects/
 data/people/
 data/notes/
 
-# Exclude root markdown files except README.md and CHANGELOG.md
+# Exclude root markdown files except README.md, CHANGELOG.md, and MIGRATION.md
 *.md
 !README.md
 !CHANGELOG.md
+!MIGRATION.md

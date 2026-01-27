@@ -10,11 +10,9 @@
 
 <div class="page-title">@{{ person_name }}</div>
 
-{% if not edit_mode %}
 <div class="section">
     <div class="section-title">
         Person Information
-        <a href="?edit=true" class="button button-small" style="float: right;">Edit</a>
     </div>
     <div class="overview-section">
         <div class="overview-row">
@@ -66,49 +64,6 @@
         </div>
     </div>
 </div>
-{% else %}
-<div class="section">
-    <div class="section-title">Edit Person Information</div>
-    <form method="post">
-        {% csrf_token %}
-        <div class="form-group">
-            <label for="name">Name</label>
-            <input type="text" name="name" id="name" value="{{ metadata.name|default:person_name }}" required>
-        </div>
-        
-        <div class="form-group">
-            <label for="job_title">Job Title</label>
-            <input type="text" name="job_title" id="job_title" value="{{ metadata.job_title|default:'' }}">
-        </div>
-        
-        <div class="form-group">
-            <label for="company">Company</label>
-            <input type="text" name="company" id="company" value="{{ metadata.company|default:'' }}">
-        </div>
-        
-        <div class="form-group">
-            <label for="email">Email</label>
-            <input type="email" name="email" id="email" value="{{ metadata.email|default:'' }}">
-        </div>
-        
-        <div class="form-group">
-            <label for="phone">Phone Number</label>
-            <input type="tel" name="phone" id="phone" value="{{ metadata.phone|default:'' }}">
-        </div>
-        
-        <div class="form-group">
-            <label for="created">First Created</label>
-            <input type="text" name="created" id="created" value="{{ metadata.created|default:'' }}" readonly style="background-color: #f0f0f0; cursor: not-allowed;">
-            <div style="font-size: 8pt; color: #828282; margin-top: 4px;">This field is automatically set and cannot be edited</div>
-        </div>
-        
-        <div class="form-actions">
-            <button type="submit">Save Changes</button>
-            <a href="{% url 'person_detail' person_id=person_id %}" class="button button-secondary">Cancel</a>
-        </div>
-    </form>
-</div>
-{% endif %}
 
 <div class="section">
     <div class="section-title">All References ({{ total_refs }})</div>
@@ -116,7 +71,7 @@
     {% if projects %}
     <details class="section" open>
         <summary>Projects ({{ projects|length }})</summary>
-        <div class="item-list" style="margin-top: 10px;">
+        <div class="item-list">
             {% for project in projects %}
             <div class="item">
                 <div class="item-title">
@@ -131,7 +86,7 @@
     {% if epics %}
     <details class="section" {% if epics %}open{% endif %}>
         <summary>Epics ({{ epics|length }})</summary>
-        <div class="item-list" style="margin-top: 10px;">
+        <div class="item-list">
             {% for epic in epics %}
             <div class="item">
                 <div class="item-title">
@@ -148,7 +103,7 @@
     {% if tasks %}
     <details class="section" {% if tasks %}open{% endif %}>
         <summary>Tasks ({{ tasks|length }})</summary>
-        <div class="item-list" style="margin-top: 10px;">
+        <div class="item-list">
             {% for task in tasks %}
             <div class="item">
                 <div class="item-title">
@@ -165,7 +120,7 @@
     {% if subtasks %}
     <details class="section" {% if subtasks %}open{% endif %}>
         <summary>Subtasks ({{ subtasks|length }})</summary>
-        <div class="item-list" style="margin-top: 10px;">
+        <div class="item-list">
             {% for subtask in subtasks %}
             <div class="item">
                 <div class="item-title">
@@ -182,7 +137,7 @@
     {% if notes %}
     <details class="section" {% if notes %}open{% endif %}>
         <summary>Notes ({{ notes|length }})</summary>
-        <div class="item-list" style="margin-top: 10px;">
+        <div class="item-list">
             {% for note in notes %}
             <div class="item">
                 <div class="item-title">

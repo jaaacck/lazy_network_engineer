@@ -15,9 +15,13 @@
                 <label for="status">Status</label>
                 <select name="status" id="status">
                     <option value="">All</option>
-                    <option value="todo" {% if filters.status == 'todo' %}selected{% endif %}>todo</option>
-                    <option value="in_progress" {% if filters.status == 'in_progress' %}selected{% endif %}>in progress</option>
-                    <option value="done" {% if filters.status == 'done' %}selected{% endif %}>done</option>
+                    <option value="todo" {% if filters.status == 'todo' %}selected{% endif %}>Todo</option>
+                    <option value="in_progress" {% if filters.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+                    <option value="done" {% if filters.status == 'done' %}selected{% endif %}>Done</option>
+                    <option value="on_hold" {% if filters.status == 'on_hold' %}selected{% endif %}>On Hold</option>
+                    <option value="blocked" {% if filters.status == 'blocked' %}selected{% endif %}>Blocked</option>
+                    <option value="cancelled" {% if filters.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                    <option value="next" {% if filters.status == 'next' %}selected{% endif %}>Next</option>
                 </select>
             </div>
             <div class="filter-item">
@@ -78,11 +82,19 @@
             <div class="item-title">
                 {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
             {% if item.due_date %}
@@ -105,11 +117,19 @@
             <div class="item-title">
                 {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
             {% if item.due_date %}
@@ -132,11 +152,19 @@
             <div class="item-title">
                 {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
             {% if item.due_date %}
@@ -159,11 +187,19 @@
             <div class="item-title">
                 {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
             {% if item.due_date %}

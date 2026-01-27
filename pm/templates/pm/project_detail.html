@@ -10,11 +10,9 @@
     <span>{{ metadata.title }}</span>
     <div style="display: flex; align-items: center; gap: 10px;">
         <div class="badge-group">
-            <span class="badge badge-status status-{{ metadata.status }}">{{ metadata.status }}</span>
+            <span class="badge badge-status status-{{ metadata.status }}">{{ metadata.status_display|default:metadata.status }}</span>
         </div>
         <div class="mode-toggle">
-            <a href="{% url 'project_detail' project=project %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
-            <a href="{% url 'project_detail' project=project %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
             <a href="{% url 'kanban_project' project=project %}">kanban</a>
             {% if not metadata.archived %}
             <form method="post">
@@ -51,45 +49,24 @@
     </div>
 {% endif %}
 
-{% if not edit_mode %}
     <!-- View Mode -->
-    {% if content %}
-    <div class="section">
-        <div class="content">
-            {{ content|markdownify|safe }}
+    <div class="section" id="description-container" style="position: relative;">
+        <button class="description-edit-btn" id="description-edit-btn" style="position: absolute; top: 8px; right: 8px;">edit</button>
+        <div class="content" id="description-display">
+            {% if content %}{{ content|markdownify|safe }}{% else %}<span style="color: #828282;">No description</span>{% endif %}
+        </div>
+        <div id="description-editor-container" style="display: none; margin-top: 10px;">
+            <textarea id="description-editor">{% if content %}{{ content }}{% endif %}</textarea>
+            <div class="description-actions" style="margin-top: 10px;">
+                <button type="button" id="description-save-btn">Save</button>
+                <button type="button" id="description-cancel-btn">Cancel</button>
+            </div>
         </div>
     </div>
-    {% endif %}
 
     <!-- All Epics -->
     <div class="section">
         <div class="section-title">Epics</div>
-        <table id="epics-table"{% if not epics %} style="display: none;"{% endif %}>
-            <thead>
-            <tr>
-                <th>Epic</th>
-                <th>Status</th>
-                <th>Progress</th>
-            </tr>
-            </thead>
-            <tbody id="epics-tbody">
-            {% for epic in epics %}
-            <tr>
-                <td>{% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}<a href="{% url 'epic_detail' project=project epic=epic.id %}">{{ epic.title }}</a></td>
-                <td><span class="badge badge-status status-{{ epic.status }}">{{ epic.status }}</span></td>
-                <td>
-                    {{ epic.completed_tasks }}/{{ epic.total_tasks }}
-                    {% if epic.total_tasks > 0 %}
-                    <div class="progress">
-                        <div class="progress-bar" style="width: {{ epic.progress_percentage }}%"></div>
-                    </div>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        <div id="epics-empty" class="empty"{% if epics %} style="display: none;"{% endif %}>No epics yet.</div>
         <form method="post" action="{% url 'new_epic' project=project %}" class="quick-setting-form ajax-create-form" id="new-epic-form">
             {% csrf_token %}
             <input type="text" name="title" id="quick_epic_title" placeholder="New epic title..." required>
@@ -108,6 +85,89 @@
             </select>
             <button type="submit">Create</button>
         </form>
+        <table id="epics-table"{% if not epics %} style="display: none;"{% endif %}>
+            <thead>
+            <tr>
+                <th>Epic</th>
+                <th>Status</th>
+                <th>Progress</th>
+            </tr>
+            </thead>
+            <tbody id="epics-tbody">
+            {% for epic in epics %}
+            <tr>
+                <td>{% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}<a href="{% url 'epic_detail' project=project epic=epic.id %}">{{ epic.title }}</a></td>
+                <td><span class="badge badge-status status-{{ epic.status }}">{{ epic.status_display|default:epic.status }}</span></td>
+                <td>
+                    {{ epic.completed_tasks }}/{{ epic.total_tasks }}
+                    {% if epic.total_tasks > 0 %}
+                    <div class="progress">
+                        <div class="progress-bar" style="width: {{ epic.progress_percentage }}%"></div>
+                    </div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <div id="epics-empty" class="empty"{% if epics %} style="display: none;"{% endif %}>No epics yet.</div>
+    </div>
+
+    <!-- Tasks (without epic) -->
+    <div class="section">
+        <div class="section-title">Tasks</div>
+        <form method="post" action="{% url 'new_task_no_epic' project=project %}" class="quick-setting-form ajax-create-form" id="new-direct-task-form">
+            {% csrf_token %}
+            <input type="text" name="title" id="quick_direct_task_title" placeholder="New task title..." required>
+            <select name="priority">
+                <option value="">Priority</option>
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3">P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5</option>
+            </select>
+            <select name="status">
+                <option value="todo">Todo</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+                <option value="on_hold">On Hold</option>
+                <option value="blocked">Blocked</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="next">Next</option>
+            </select>
+            <button type="submit">Create</button>
+        </form>
+        <table id="direct-tasks-table"{% if not direct_tasks %} style="display: none;"{% endif %} class="sortable-table">
+            <thead>
+            <tr>
+                <th class="col-checkbox"><input type="checkbox" id="select-all-direct-tasks" title="Select all"></th>
+                <th class="sortable" data-sort="status">Status <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="priority">Priority <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="title">Task <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="created">Created <span class="sort-indicator">↕</span></th>
+                <th class="sortable" data-sort="due_date">Due Date <span class="sort-indicator">↕</span></th>
+            </tr>
+            </thead>
+            <tbody id="direct-tasks-tbody">
+            {% for task in direct_tasks %}
+            <tr class="draggable-row task-row" data-task-id="{{ task.id }}" 
+                data-status="{{ task.status }}" 
+                data-priority="{{ task.priority|default:'999' }}" 
+                data-title="{{ task.title|lower }}" 
+                data-created="{{ task.created|default:'9999-99-99' }}" 
+                data-due-date="{{ task.due_date|default:'9999-99-99' }}">
+                <td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="{{ task.id }}"></td>
+                <td><span class="badge badge-status status-{{ task.status }}">{{ task.status_display|default:task.status }}</span></td>
+                <td>{% if task.priority %}<span class="badge badge-priority priority-{{ task.priority }}">P{{ task.priority }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                <td>{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}<a href="{% url 'task_detail_no_epic' project=project task=task.id %}">{{ task.title }}</a></td>
+                <td>{% if task.created %}{{ task.created }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                <td>{% if task.due_date %}{{ task.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <div id="direct-tasks-empty" class="empty"{% if direct_tasks %} style="display: none;"{% endif %}>No tasks yet.</div>
     </div>
 
     <!-- Archived Epics -->
@@ -126,7 +186,7 @@
             {% for epic in archived_epics %}
             <tr>
                 <td>{% if epic.seq_id %}<span class="seq-id">{{ epic.seq_id }}</span>{% endif %}<a href="{% url 'epic_detail' project=project epic=epic.id %}">{{ epic.title }}</a></td>
-                <td><span class="badge badge-status status-{{ epic.status }}">{{ epic.status }}</span></td>
+                <td><span class="badge badge-status status-{{ epic.status }}">{{ epic.status_display|default:epic.status }}</span></td>
                 <td>
                     {{ epic.completed_tasks }}/{{ epic.total_tasks }}
                     {% if epic.total_tasks > 0 %}
@@ -146,7 +206,7 @@
         <div class="section-title">Recent Activity</div>
         <div class="activity-filters">
             <label>
-                <input type="checkbox" id="filter-system" checked> System messages
+                <input type="checkbox" id="filter-system"> System messages
             </label>
             <label>
                 <input type="checkbox" id="filter-user" checked> User messages
@@ -176,45 +236,6 @@
         <div class="empty">No recent activity.</div>
         {% endif %}
     </div>
-
-{% else %}
-    <!-- Edit Mode -->
-    <div class="section">
-        <form method="post">
-            {% csrf_token %}
-
-            <div class="form-group">
-                <label for="title">Title</label>
-                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
-            </div>
-
-            <div class="form-group">
-                <label for="status">Status</label>
-                <select name="status" id="status">
-                    <option value="active" {% if metadata.status == 'active' %}selected{% endif %}>active</option>
-                    <option value="completed" {% if metadata.status == 'completed' %}selected{% endif %}>completed</option>
-                    <option value="canceled" {% if metadata.status == 'canceled' %}selected{% endif %}>canceled</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="color">Project Color</label>
-                <input type="color" name="color" id="color" value="{{ metadata.color|default:'#ff6600' }}" class="color-input">
-                <div style="font-size: 8pt; color: #828282; margin-top: 4px;">Used to identify this project on the calendar</div>
-            </div>
-
-            <div class="form-group">
-                <label for="content">Description (markdown)</label>
-                <textarea name="content" id="content">{{ content }}</textarea>
-            </div>
-
-            <div class="form-actions">
-                <button type="submit">Save Changes</button>
-                <a href="{% url 'project_detail' project=project %}" class="button button-secondary">Cancel</a>
-            </div>
-        </form>
-    </div>
-{% endif %}
 
 <script>
 // AJAX epic creation
@@ -246,7 +267,7 @@ if (epicForm) {
                 var tr = document.createElement('tr');
                 var seqIdHtml = data.seq_id ? '<span class="seq-id">' + data.seq_id + '</span>' : '';
                 tr.innerHTML = '<td>' + seqIdHtml + '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a></td>' +
-                    '<td><span class="badge badge-status status-' + data.status + '">' + data.status + '</span></td>' +
+                    '<td><span class="badge badge-status status-' + data.status + '">' + (data.status_display || data.status) + '</span></td>' +
                     '<td>0/0</td>';
                 tbody.appendChild(tr);
                 
@@ -257,6 +278,66 @@ if (epicForm) {
         })
         .catch(function(err) {
             console.error('Error creating epic:', err);
+        });
+    });
+}
+
+// AJAX direct task creation
+var directTaskForm = document.getElementById('new-direct-task-form');
+if (directTaskForm) {
+    directTaskForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var formData = new FormData(directTaskForm);
+        
+        fetch(directTaskForm.action, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                // Show table if hidden
+                var table = document.getElementById('direct-tasks-table');
+                var tbody = document.getElementById('direct-tasks-tbody');
+                var empty = document.getElementById('direct-tasks-empty');
+                
+                table.style.display = '';
+                empty.style.display = 'none';
+                
+                // Create new row matching epic task format
+                var tr = document.createElement('tr');
+                tr.className = 'draggable-row task-row';
+                tr.setAttribute('data-task-id', data.id);
+                tr.setAttribute('data-status', data.status);
+                tr.setAttribute('data-priority', data.priority || '999');
+                tr.setAttribute('data-title', data.title.toLowerCase());
+                tr.setAttribute('data-created', data.created || '9999-99-99');
+                tr.setAttribute('data-due-date', data.due_date || '9999-99-99');
+                
+                var seqIdHtml = data.seq_id ? '<span class="seq-id">' + escapeHtml(data.seq_id) + '</span>' : '';
+                var priorityHtml = data.priority ? '<span class="badge badge-priority priority-' + data.priority + '">P' + data.priority + '</span>' : '<span class="text-muted">—</span>';
+                var createdHtml = data.created ? escapeHtml(data.created) : '<span class="text-muted">—</span>';
+                var dueDateHtml = data.due_date ? escapeHtml(data.due_date) : '<span class="text-muted">—</span>';
+                
+                tr.innerHTML = '<td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="' + data.id + '"></td>' +
+                    '<td><span class="badge badge-status status-' + data.status + '">' + (data.status_display || data.status) + '</span></td>' +
+                    '<td>' + priorityHtml + '</td>' +
+                    '<td>' + seqIdHtml + '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a></td>' +
+                    '<td>' + createdHtml + '</td>' +
+                    '<td>' + dueDateHtml + '</td>';
+                
+                tbody.appendChild(tr);
+                
+                // Reset form
+                directTaskForm.reset();
+                document.getElementById('quick_direct_task_title').focus();
+            }
+        })
+        .catch(function(err) {
+            console.error('Error creating direct task:', err);
         });
     });
 }
@@ -273,7 +354,7 @@ var filterUser = document.getElementById('filter-user');
 var activityList = document.getElementById('activity-list');
 
 function updateActivityFilter() {
-    if (!activityList) return;
+    if (!activityList || !filterSystem || !filterUser) return;
     var showSystem = filterSystem.checked;
     var showUser = filterUser.checked;
     
@@ -289,5 +370,222 @@ function updateActivityFilter() {
 
 if (filterSystem) filterSystem.addEventListener('change', updateActivityFilter);
 if (filterUser) filterUser.addEventListener('change', updateActivityFilter);
+updateActivityFilter(); // Apply filter on page load
+
+// Table sorting for direct tasks (matching epic task sorting)
+var sortDirection = {};
+document.querySelectorAll('#direct-tasks-table .sortable').forEach(function(header) {
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', function() {
+        var column = this.getAttribute('data-sort');
+        var table = this.closest('table');
+        var tbody = table.querySelector('tbody');
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        
+        // Toggle sort direction
+        if (!sortDirection[column]) {
+            sortDirection[column] = 'asc';
+        } else {
+            sortDirection[column] = sortDirection[column] === 'asc' ? 'desc' : 'asc';
+        }
+        
+        // Sort rows
+        rows.sort(function(a, b) {
+            var aVal = a.getAttribute('data-' + column) || '';
+            var bVal = b.getAttribute('data-' + column) || '';
+            
+            // Handle numeric values (priority)
+            if (column === 'priority') {
+                aVal = parseInt(aVal) || 999;
+                bVal = parseInt(bVal) || 999;
+            }
+            
+            // Handle date values
+            if (column === 'created' || column === 'due_date') {
+                // Dates are already in YYYY-MM-DD format, so string comparison works
+            }
+            
+            // Handle text values (title)
+            if (column === 'title') {
+                aVal = aVal.toLowerCase();
+                bVal = bVal.toLowerCase();
+            }
+            
+            if (aVal < bVal) return sortDirection[column] === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortDirection[column] === 'asc' ? 1 : -1;
+            return 0;
+        });
+        
+        // Re-append sorted rows
+        rows.forEach(function(row) {
+            tbody.appendChild(row);
+        });
+        
+        // Update sort indicators
+        table.querySelectorAll('.sort-indicator').forEach(function(ind) {
+            ind.textContent = '↕';
+        });
+        this.querySelector('.sort-indicator').textContent = sortDirection[column] === 'asc' ? '↑' : '↓';
+        });
+    });
+</script>
+
+<script>
+    // Description editing
+    var descriptionEditBtn = document.getElementById('description-edit-btn');
+    var descriptionDisplay = document.getElementById('description-display');
+    var descriptionEditorContainer = document.getElementById('description-editor-container');
+    var descriptionEditor = document.getElementById('description-editor');
+    var descriptionSaveBtn = document.getElementById('description-save-btn');
+    var descriptionCancelBtn = document.getElementById('description-cancel-btn');
+    var descriptionMDE = null;
+    var originalContent = descriptionEditor ? descriptionEditor.value : '';
+
+    if (descriptionEditBtn && descriptionEditor) {
+        descriptionEditBtn.addEventListener('click', function() {
+            // Hide display and edit button
+            descriptionDisplay.style.display = 'none';
+            descriptionEditBtn.style.display = 'none';
+            
+            // Show editor container
+            descriptionEditorContainer.style.display = 'block';
+            
+            // Initialize EasyMDE if not already initialized
+            if (!descriptionMDE) {
+                descriptionMDE = new EasyMDE({
+                    element: descriptionEditor,
+                    spellChecker: false,
+                    toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                    minHeight: '200px',
+                    placeholder: 'Enter description... (Markdown supported)',
+                    status: false,
+                    autosave: {
+                        enabled: false
+                    }
+                });
+                originalContent = descriptionMDE.value();
+                
+                // Initialize @mention autocomplete for description editor
+                initMentionAutocomplete(descriptionMDE);
+                
+                // Handle clipboard image paste (Ctrl+V)
+                descriptionMDE.codemirror.on('paste', function(cm, e) {
+                    var clipboardData = e.clipboardData || window.clipboardData;
+                    if (!clipboardData) return;
+                    
+                    var items = clipboardData.items;
+                    if (!items) return;
+                    
+                    // Check if clipboard contains image
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            e.preventDefault();
+                            var file = items[i].getAsFile();
+                            
+                            // Show loading indicator
+                            var cursor = cm.getCursor();
+                            var loadingText = '![Uploading image...]()';
+                            cm.replaceRange(loadingText, cursor);
+                            
+                            // Upload image
+                            var formData = new FormData();
+                            formData.append('image', file);
+                            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                            
+                            fetch('{% url "upload_image" %}', {
+                                method: 'POST',
+                                body: formData,
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                }
+                            })
+                            .then(function(response) {
+                                return response.json();
+                            })
+                            .then(function(data) {
+                                if (data.success) {
+                                    // Replace loading text with markdown image
+                                    var markdownImage = '![' + file.name + '](' + data.url + ')';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, markdownImage);
+                                    cm.setValue(content);
+                                } else {
+                                    // Replace loading text with error message
+                                    var errorText = '![Image upload failed: ' + (data.error || 'Unknown error') + ']()';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, errorText);
+                                    cm.setValue(content);
+                                }
+                            })
+                            .catch(function(err) {
+                                // Replace loading text with error message
+                                var errorText = '![Image upload failed: Network error]()';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, errorText);
+                                cm.setValue(content);
+                            });
+                            
+                            return;
+                        }
+                    }
+                });
+            } else {
+                descriptionMDE.value(originalContent);
+            }
+        });
+
+        if (descriptionSaveBtn) {
+            descriptionSaveBtn.addEventListener('click', function() {
+                var content = descriptionMDE ? descriptionMDE.value() : descriptionEditor.value;
+                var formData = new FormData();
+                formData.append('quick_update', 'description');
+                formData.append('description', content);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+                fetch('{% url "project_detail" project=project %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        // Update display with rendered markdown
+                        descriptionDisplay.innerHTML = data.content;
+                        originalContent = content;
+                        
+                        // Switch back to view mode
+                        descriptionEditorContainer.style.display = 'none';
+                        descriptionDisplay.style.display = 'block';
+                        descriptionEditBtn.style.display = 'block';
+                    } else {
+                        alert('Error saving description');
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error saving description:', err);
+                    alert('Error saving description');
+                });
+            });
+        }
+
+        if (descriptionCancelBtn) {
+            descriptionCancelBtn.addEventListener('click', function() {
+                // Restore original content
+                if (descriptionMDE) {
+                    descriptionMDE.value(originalContent);
+                } else {
+                    descriptionEditor.value = originalContent;
+                }
+                
+                // Switch back to view mode
+                descriptionEditorContainer.style.display = 'none';
+                descriptionDisplay.style.display = 'block';
+                descriptionEditBtn.style.display = 'block';
+            });
+        }
+    }
 </script>
 {% endblock %}

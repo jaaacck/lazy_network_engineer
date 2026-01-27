@@ -1,5 +1,5 @@
 Django==6.0.1
-PyYAML>=6.0
+PyYAML>=6.0  # Only needed for migration script (pm/utils.py load_entity)
 markdown>=3.4
 bleach>=6.0
 beautifulsoup4>=4.11

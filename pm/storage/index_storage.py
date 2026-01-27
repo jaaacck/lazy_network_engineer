@@ -3,9 +3,13 @@ Index storage layer - SQLite index operations (performance layer).
 """
 import json
 import logging
+import time
+from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import Q
-from pm.models import Entity, Update, ensure_index_tables
+from django.utils.dateparse import parse_date, parse_datetime
+from django.utils import timezone as tz
+from pm.models import Entity, Update, Status, Person, EntityPerson, Label, EntityLabel, ensure_index_tables
 
 logger = logging.getLogger('pm')
 
@@ -13,12 +17,17 @@ logger = logging.getLogger('pm')
 class IndexStorage:
     """Handles SQLite index operations."""
     
-    def __init__(self):
-        ensure_index_tables()
+    _tables_ensured = False
     
-    def sync_entity(self, entity_id, entity_type, file_path, file_mtime, metadata, content=None, 
+    def __init__(self):
+        # Only ensure tables once, not on every initialization
+        if not IndexStorage._tables_ensured:
+            ensure_index_tables()
+            IndexStorage._tables_ensured = True
+    
+    def sync_entity(self, entity_id, entity_type, metadata, content=None, 
                     updates_text='', people_tags=None, labels=None):
-        """Sync an entity to the SQLite index."""
+        """Sync an entity to the SQLite database (primary storage)."""
         try:
             with transaction.atomic():
                 # Prepare entity data
@@ -26,17 +35,84 @@ class IndexStorage:
                     'id': entity_id,
                     'type': entity_type,
                     'title': metadata.get('title', 'Untitled'),
-                    'status': metadata.get('status', ''),
+                    'status': metadata.get('status', ''),  # Keep old field for backward compatibility
                     'priority': metadata.get('priority'),
                     'created': metadata.get('created', ''),
                     'updated': metadata.get('updated', ''),
-                    'due_date': metadata.get('due_date', ''),
-                    'schedule_start': metadata.get('schedule_start', ''),
-                    'schedule_end': metadata.get('schedule_end', ''),
-                    'file_path': file_path,
-                    'file_mtime': file_mtime,
-                    'metadata_json': json.dumps(metadata),
+                    'due_date': metadata.get('due_date', ''),  # Keep old field for backward compatibility
+                    'schedule_start': metadata.get('schedule_start', ''),  # Keep old field for backward compatibility
+                    'schedule_end': metadata.get('schedule_end', ''),  # Keep old field for backward compatibility
+                    'content': content or '',
+                    'metadata_json': json.dumps(metadata),  # Keep for backward compatibility
+                    # New extracted metadata fields
+                    'seq_id': metadata.get('seq_id', '') or None,
+                    'archived': metadata.get('archived', False),
+                    'is_inbox_epic': metadata.get('is_inbox_epic', False),
+                    'color': metadata.get('color', '') or None,
+                    'notes': metadata.get('notes', []),
+                    'dependencies': metadata.get('dependencies', []),
+                    'checklist': metadata.get('checklist', []),
+                    'stats': metadata.get('stats', {}),
+                    'stats_version': metadata.get('stats_version'),
+                    'stats_updated': None,
                 }
+                
+                # Parse stats_updated datetime if present
+                if metadata.get('stats_updated'):
+                    try:
+                        parsed = parse_datetime(metadata['stats_updated'])
+                        if parsed and settings.USE_TZ and tz.is_naive(parsed):
+                            parsed = tz.make_aware(parsed, tz.get_current_timezone())
+                        if parsed:
+                            entity_data['stats_updated'] = parsed
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Set Status ForeignKey if status is provided
+                status_name = metadata.get('status', '')
+                if status_name:
+                    try:
+                        # Find status that applies to this entity type
+                        status_obj = Status.objects.filter(
+                            name=status_name,
+                            is_active=True
+                        ).filter(
+                            Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
+                        ).first()
+                        
+                        if status_obj:
+                            entity_data['status_fk'] = status_obj
+                    except Exception as e:
+                        logger.warning(f"Could not find status '{status_name}' for entity type '{entity_type}': {e}")
+                
+                # Parse and set date fields
+                if metadata.get('due_date'):
+                    try:
+                        parsed_date = parse_date(metadata['due_date'])
+                        if not parsed_date:
+                            parsed_datetime = parse_datetime(metadata['due_date'])
+                            if parsed_datetime:
+                                parsed_date = parsed_datetime.date()
+                        if parsed_date:
+                            entity_data['due_date_dt'] = parsed_date
+                    except (ValueError, TypeError):
+                        pass
+                
+                if metadata.get('schedule_start'):
+                    try:
+                        parsed_datetime = parse_datetime(metadata['schedule_start'])
+                        if parsed_datetime:
+                            entity_data['schedule_start_dt'] = parsed_datetime
+                    except (ValueError, TypeError):
+                        pass
+                
+                if metadata.get('schedule_end'):
+                    try:
+                        parsed_datetime = parse_datetime(metadata['schedule_end'])
+                        if parsed_datetime:
+                            entity_data['schedule_end_dt'] = parsed_datetime
+                    except (ValueError, TypeError):
+                        pass
                 
                 # Set relationships based on type
                 if entity_type == 'epic':
@@ -50,10 +126,16 @@ class IndexStorage:
                     entity_data['task_id'] = metadata.get('task_id', '')
                 
                 # Update or create entity
-                Entity.objects.update_or_create(
+                entity, created = Entity.objects.update_or_create(
                     id=entity_id,
                     defaults=entity_data
                 )
+                
+                # Update EntityPerson relationships
+                self._sync_entity_persons(entity, people_tags or [])
+                
+                # Update EntityLabel relationships
+                self._sync_entity_labels(entity, labels or [])
                 
                 # Update search index
                 self._update_search_index(entity_id, metadata.get('title', ''), content or '', 
@@ -107,6 +189,67 @@ class IndexStorage:
                     VALUES (%s, %s, %s)
                 """, [metadata['task_id'], entity_id, 'subtask'])
     
+    def _sync_entity_persons(self, entity, people_tags):
+        """Sync EntityPerson relationships."""
+        # Normalize people tags (remove @ prefix, lowercase for lookup)
+        normalized_tags = [tag.strip().lstrip('@').lower() for tag in people_tags if tag.strip()]
+        
+        # Get current Person IDs that should be assigned
+        person_ids_to_keep = set()
+        for tag in normalized_tags:
+            person = Person.objects.filter(name__iexact=tag).first()
+            if person:
+                person_ids_to_keep.add(person.id)
+        
+        # Get current relationships
+        current_relationships = EntityPerson.objects.filter(entity=entity)
+        current_person_ids = {ep.person_id for ep in current_relationships}
+        
+        # Add new relationships
+        for person_id in person_ids_to_keep - current_person_ids:
+            EntityPerson.objects.get_or_create(
+                entity=entity,
+                person_id=person_id
+            )
+        
+        # Remove relationships that are no longer in the list
+        EntityPerson.objects.filter(entity=entity).exclude(person_id__in=person_ids_to_keep).delete()
+    
+    def _sync_entity_labels(self, entity, labels_list):
+        """Sync EntityLabel relationships."""
+        # Normalize labels (handle both string and list formats)
+        if isinstance(labels_list, str):
+            normalized_labels = [l.strip().lower() for l in labels_list.split(',') if l.strip()]
+        elif isinstance(labels_list, list):
+            normalized_labels = [str(l).strip().lower() for l in labels_list if str(l).strip()]
+        else:
+            normalized_labels = []
+        
+        # Get current Label IDs that should be assigned
+        label_ids_to_keep = set()
+        for label_name in normalized_labels:
+            if not label_name:
+                continue
+            label, created = Label.objects.get_or_create(
+                name=label_name.lower(),  # Normalize to lowercase
+                defaults={'name': label_name.lower()}
+            )
+            label_ids_to_keep.add(label.id)
+        
+        # Get current relationships
+        current_relationships = EntityLabel.objects.filter(entity=entity)
+        current_label_ids = {el.label_id for el in current_relationships}
+        
+        # Add new relationships
+        for label_id in label_ids_to_keep - current_label_ids:
+            EntityLabel.objects.get_or_create(
+                entity=entity,
+                label_id=label_id
+            )
+        
+        # Remove relationships that are no longer in the list
+        EntityLabel.objects.filter(entity=entity).exclude(label_id__in=label_ids_to_keep).delete()
+    
     def _sync_updates(self, entity_id, updates_list):
         """Sync updates to updates table."""
         with connection.cursor() as cursor:
@@ -123,17 +266,11 @@ class IndexStorage:
     def get_entity(self, entity_id):
         """Get entity from index."""
         try:
-            return Entity.objects.get(id=entity_id)
+            result = Entity.objects.get(id=entity_id)
+            return result
         except Entity.DoesNotExist:
             return None
     
-    def is_stale(self, entity_id, file_mtime):
-        """Check if index entry is stale compared to file."""
-        try:
-            entity = Entity.objects.get(id=entity_id)
-            return entity.file_mtime < file_mtime
-        except Entity.DoesNotExist:
-            return True
     
     def search(self, query):
         """Full-text search using FTS5."""
@@ -185,15 +322,24 @@ class IndexStorage:
         if entity_type:
             qs = qs.filter(type=entity_type)
         if status:
-            qs = qs.filter(status=status)
+            # Try to use status_fk first, fall back to old status field
+            try:
+                status_obj = Status.objects.filter(name=status, is_active=True).first()
+                if status_obj:
+                    qs = qs.filter(status_fk=status_obj)
+                else:
+                    qs = qs.filter(status=status)  # Fallback to old field
+            except Exception:
+                qs = qs.filter(status=status)  # Fallback to old field
         if project_id:
             qs = qs.filter(project_id=project_id)
         if epic_id:
             qs = qs.filter(epic_id=epic_id)
         if due_date_start:
-            qs = qs.filter(due_date__gte=due_date_start)
+            # Try new date field first, fall back to old string field
+            qs = qs.filter(Q(due_date_dt__gte=due_date_start) | Q(due_date__gte=due_date_start))
         if due_date_end:
-            qs = qs.filter(due_date__lte=due_date_end)
+            qs = qs.filter(Q(due_date_dt__lte=due_date_end) | Q(due_date__lte=due_date_end))
         
         return qs
     
@@ -201,6 +347,12 @@ class IndexStorage:
         """Delete entity from index."""
         try:
             with transaction.atomic():
+                # Delete EntityPerson relationships (CASCADE should handle this, but explicit is better)
+                EntityPerson.objects.filter(entity_id=entity_id).delete()
+                
+                # Delete EntityLabel relationships (CASCADE should handle this, but explicit is better)
+                EntityLabel.objects.filter(entity_id=entity_id).delete()
+                
                 # Delete from search index
                 with connection.cursor() as cursor:
                     cursor.execute("DELETE FROM search_index WHERE entity_id = %s", [entity_id])

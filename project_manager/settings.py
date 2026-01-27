@@ -123,10 +123,11 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'pm', 'static'),
 ]
 
-# Ensure uploads directory exists for static file serving
+# Note: uploads directory is NOT added to STATICFILES_DIRS
+# because it has a nested structure (uploads/YYYY/MM/) that staticfiles
+# cannot handle. Instead, we serve uploaded images via a custom URL pattern
+# in urls.py that handles the nested directory structure.
 uploads_dir = os.path.join(DATA_ROOT, 'uploads')
-if os.path.exists(uploads_dir):
-    STATICFILES_DIRS.append(uploads_dir)
 
 # Logging Configuration
 LOGGING = {

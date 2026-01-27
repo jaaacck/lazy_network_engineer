@@ -4,7 +4,7 @@
 
 ---
 
-A hierarchical project management system for network engineers, using markdown files with YAML frontmatter for data storage.
+A hierarchical project management system for network engineers, using SQLite database for data storage.
 
 ## Hierarchy
 
@@ -32,6 +32,9 @@ pip install -r requirements.txt
 ```bash
 mkdir -p logs
 python manage.py migrate
+
+# If migrating from file-based storage, run:
+# python manage.py migrate_to_sqlite --backup
 ```
 
 ### 4. Run Server
@@ -53,38 +56,32 @@ Edit `.env` to set:
 - `SECRET_KEY` - Django secret key (generate a new one for production)
 - `DEBUG` - Set to False for production
 - `ALLOWED_HOSTS` - Your domain names
-- `DATA_ROOT` - Where to store project data (defaults to ./data)
+- `DATA_ROOT` - Where to store uploads and other files (defaults to ./data)
 
 ## Features
 
 - **Hierarchical project structure** - Projects contain Epics, Epics contain Tasks, Tasks contain Subtasks
 - **Markdown support** - Rich text formatting with markdown
-- **File-based storage** - All data stored as markdown files with YAML frontmatter
+- **SQLite database** - All data stored in SQLite database for reliability and performance
 - **Progress tracking** - Automatic progress calculation for epics based on task completion
 - **Updates system** - Track progress updates on tasks and subtasks
-- **Security** - Path traversal protection, XSS prevention, environment-based configuration
+- **Security** - Input validation, XSS prevention, environment-based configuration
 
 ## Project Structure
 
 ```
 project_manager/
 ├── pm/                          # Main app
+│   ├── models.py               # Django models (Entity, Update)
 │   ├── views.py                # View functions
-│   ├── utils.py                # Shared utilities (load/save, validation)
+│   ├── utils.py                # Shared utilities (validation, helpers)
+│   ├── storage/                # Storage layer
+│   │   └── index_storage.py   # SQLite operations and search index
 │   ├── templates/              # HTML templates
 │   └── templatetags/           # Custom template filters
-├── data/                       # Project data (markdown files)
-│   └── projects/
-│       ├── project-xxx.md
-│       └── project-xxx/
-│           └── epics/
-│               ├── epic-xxx.md
-│               └── epic-xxx/
-│                   └── tasks/
-│                       ├── task-xxx.md
-│                       └── task-xxx/
-│                           └── subtasks/
-│                               └── subtask-xxx.md
+├── db.sqlite3                  # SQLite database (all entity data)
+├── data/                       # Uploads and other files
+│   └── uploads/                # User-uploaded images
 ├── logs/                       # Application logs
 ├── requirements.txt            # Python dependencies
 ├── .env.example               # Environment configuration template
@@ -93,11 +90,11 @@ project_manager/
 
 ## Security Features
 
-✅ **Path Traversal Protection** - All entity IDs validated with regex patterns
+✅ **Input Validation** - All entity IDs validated with regex patterns
 ✅ **XSS Prevention** - HTML sanitization with bleach
 ✅ **Environment Variables** - Secrets stored in environment, not code
 ✅ **Proper Logging** - Security events logged to file
-✅ **Input Validation** - All user inputs validated before processing
+✅ **SQL Injection Protection** - Django ORM provides parameterized queries
 
 ## Testing
 
@@ -134,7 +131,8 @@ See `IMPROVEMENTS.md` for detailed production deployment guide.
 ## Technology Stack
 
 - **Django 6.0.1** - Web framework
-- **PyYAML** - YAML parsing
+- **SQLite** - Database (via Django ORM)
 - **Markdown** - Text formatting
 - **Bleach** - HTML sanitization
 - **BeautifulSoup4** - HTML parsing
+- **PyYAML** - Used only for migration from file-based storage (can be removed after migration)

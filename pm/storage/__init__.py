@@ -1,14 +1,10 @@
 """
-Storage abstraction layer for hybrid markdown + SQLite architecture.
+Storage layer for SQLite-based architecture.
 
 This module provides:
-- file_storage: Direct markdown file operations (source of truth)
-- index_storage: SQLite index operations (performance layer)
-- sync: Synchronization between files and index
+- index_storage: SQLite operations (primary storage and search index)
 """
 
-from .file_storage import FileStorage
 from .index_storage import IndexStorage
-from .sync import SyncManager
 
-__all__ = ['FileStorage', 'IndexStorage', 'SyncManager']
+__all__ = ['IndexStorage']

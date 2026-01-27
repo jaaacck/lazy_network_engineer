@@ -4,17 +4,20 @@
 {% block content %}
 <div class="breadcrumb">
     <a href="{% url 'project_list' %}">projects</a> &gt;
-    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
-    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a> &gt;
-    <a href="{% url 'task_detail' project=project epic=epic task=task %}">{{ task_title }}</a> &gt;
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a>{% if epic %} &gt;
+    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a>{% endif %} &gt;
+    {% if epic %}
+    <a href="{% url 'task_detail' project=project epic=epic task=task %}">{{ task_title }}</a>
+    {% else %}
+    <a href="{% url 'task_detail_no_epic' project=project task=task %}">{{ task_title }}</a>
+    {% endif %} &gt;
     {{ metadata.title }}
 </div>
 
 <div class="page-title">
     <span>{% if metadata.seq_id %}<span class="seq-id">{{ metadata.seq_id }}</span>{% endif %}{{ metadata.title }}</span>
     <div class="mode-toggle">
-        <a href="{% url 'subtask_detail' project=project epic=epic task=task subtask=subtask %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
-        <a href="{% url 'subtask_detail' project=project epic=epic task=task subtask=subtask %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
+        <button class="move-subtask-button" id="move-subtask-button">Move</button>
     </div>
 </div>
 
@@ -27,9 +30,13 @@
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
                 <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
-                    <option value="todo" {% if metadata.status == 'todo' %}selected{% endif %}>todo</option>
-                    <option value="in_progress" {% if metadata.status == 'in_progress' %}selected{% endif %}>in progress</option>
-                    <option value="done" {% if metadata.status == 'done' %}selected{% endif %}>done</option>
+                    <option value="todo" {% if metadata.status == 'todo' %}selected{% endif %}>Todo</option>
+                    <option value="in_progress" {% if metadata.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+                    <option value="done" {% if metadata.status == 'done' %}selected{% endif %}>Done</option>
+                    <option value="on_hold" {% if metadata.status == 'on_hold' %}selected{% endif %}>On Hold</option>
+                    <option value="blocked" {% if metadata.status == 'blocked' %}selected{% endif %}>Blocked</option>
+                    <option value="cancelled" {% if metadata.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                    <option value="next" {% if metadata.status == 'next' %}selected{% endif %}>Next</option>
                 </select>
             </form>
         </div>
@@ -132,14 +139,22 @@
         </div>
     </div>
     
-    {% if content %}
-    <div class="overview-row overview-description">
+    <div class="overview-row overview-description" id="description-container" style="position: relative;">
+        <button class="description-edit-btn" id="description-edit-btn" style="position: absolute; top: 8px; right: 8px;">edit</button>
         <div class="overview-field overview-field-full">
             <span class="field-label">Description</span>
-            <div class="field-value content">{{ content|markdownify|safe }}</div>
+            <div class="field-value content" id="description-display">
+                {% if content %}{{ content|markdownify|safe }}{% else %}<span style="color: #828282;">No description</span>{% endif %}
+            </div>
+            <div id="description-editor-container" style="display: none; margin-top: 10px;">
+                <textarea id="description-editor">{% if content %}{{ content }}{% endif %}</textarea>
+                <div class="description-actions" style="margin-top: 10px;">
+                    <button type="button" id="description-save-btn">Save</button>
+                    <button type="button" id="description-cancel-btn">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
-    {% endif %}
 </div>
 
 {% if markdown_total > 0 %}
@@ -151,7 +166,6 @@
 </div>
 {% endif %}
 
-{% if not edit_mode %}
     <!-- Checklist Section -->
     <details class="section checklist-section"{% if metadata.checklist %} open{% endif %}>
         <summary class="section-title">Checklist{% if metadata.checklist %} ({{ metadata.checklist|length }}){% endif %}</summary>
@@ -202,7 +216,7 @@
                             <button type="submit">
                                 {% if t.seq_id %}<span class="seq-id">{{ t.seq_id }}</span>{% endif %}
                                 {{ t.title }}
-                                <span class="dep-option-meta">{{ t.epic_title }} · {{ t.status }}</span>
+                                <span class="dep-option-meta">{% if t.epic_title %}{{ t.epic_title }}{% else %}Direct Task{% endif %} · {{ t.status_display|default:t.status }}</span>
                             </button>
                         </form>
                         {% endfor %}
@@ -215,13 +229,21 @@
                         <div class="dep-main">
                             {% if block.seq_id %}<span class="seq-id">{{ block.seq_id }}</span>{% endif %}
                             {% if block.type == 'task' %}
+                            {% if block.epic_id %}
                             <a href="{% url 'task_detail' project=project epic=block.epic_id task=block.id %}">{{ block.title }}</a>
                             {% else %}
-                            <a href="{% url 'subtask_detail' project=project epic=block.epic_id task=block.task_id subtask=block.id %}">{{ block.title }}</a>
+                            <a href="{% url 'task_detail_no_epic' project=project task=block.id %}">{{ block.title }}</a>
                             {% endif %}
-                            <span class="badge badge-status status-{{ block.status }}">{{ block.status }}</span>
+                            {% else %}
+                            {% if block.epic_id %}
+                            <a href="{% url 'subtask_detail' project=project epic=block.epic_id task=block.task_id subtask=block.id %}">{{ block.title }}</a>
+                            {% else %}
+                            <a href="{% url 'subtask_detail_no_epic' project=project task=block.task_id subtask=block.id %}">{{ block.title }}</a>
+                            {% endif %}
+                            {% endif %}
+                            <span class="badge badge-status status-{{ block.status }}">{{ block.status_display|default:block.status }}</span>
                         </div>
-                        <div class="dep-meta">{{ block.epic_title }}</div>
+                        <div class="dep-meta">{% if block.epic_title %}{{ block.epic_title }}{% else %}Direct Task{% endif %}</div>
                         <form method="post" class="dep-remove">{% csrf_token %}<input type="hidden" name="remove_block" value="{{ block.id }}"><button type="submit" class="delete-inline">×</button></form>
                     </div>
                     {% endfor %}
@@ -240,7 +262,7 @@
                             <button type="submit">
                                 {% if t.seq_id %}<span class="seq-id">{{ t.seq_id }}</span>{% endif %}
                                 {{ t.title }}
-                                <span class="dep-option-meta">{{ t.epic_title }} · {{ t.status }}</span>
+                                <span class="dep-option-meta">{% if t.epic_title %}{{ t.epic_title }}{% else %}Direct Task{% endif %} · {{ t.status_display|default:t.status }}</span>
                             </button>
                         </form>
                         {% endfor %}
@@ -253,13 +275,21 @@
                         <div class="dep-main">
                             {% if blocker.seq_id %}<span class="seq-id">{{ blocker.seq_id }}</span>{% endif %}
                             {% if blocker.type == 'task' %}
+                            {% if blocker.epic_id %}
                             <a href="{% url 'task_detail' project=project epic=blocker.epic_id task=blocker.id %}">{{ blocker.title }}</a>
                             {% else %}
+                            <a href="{% url 'task_detail_no_epic' project=project task=blocker.id %}">{{ blocker.title }}</a>
+                            {% endif %}
+                            {% else %}
+                            {% if blocker.epic_id %}
                             <a href="{% url 'subtask_detail' project=project epic=blocker.epic_id task=blocker.task_id subtask=blocker.id %}">{{ blocker.title }}</a>
+                            {% else %}
+                            <a href="{% url 'subtask_detail_no_epic' project=project task=blocker.task_id subtask=blocker.id %}">{{ blocker.title }}</a>
+                            {% endif %}
                             {% endif %}
                             <span class="badge badge-status status-{{ blocker.status }}">{{ blocker.status }}</span>
                         </div>
-                        <div class="dep-meta">{{ blocker.epic_title }}</div>
+                        <div class="dep-meta">{% if blocker.epic_title %}{{ blocker.epic_title }}{% else %}Direct Task{% endif %}</div>
                         <form method="post" class="dep-remove">{% csrf_token %}<input type="hidden" name="remove_blocked_by" value="{{ blocker.id }}"><button type="submit" class="delete-inline">×</button></form>
                     </div>
                     {% endfor %}
@@ -316,7 +346,7 @@
         <div class="section-title">Activity</div>
         <div class="activity-filters">
             <label>
-                <input type="checkbox" id="filter-system" checked> System messages
+                <input type="checkbox" id="filter-system"> System messages
             </label>
             <label>
                 <input type="checkbox" id="filter-user" checked> User messages
@@ -349,60 +379,6 @@
         <div class="empty">No activity yet.</div>
         {% endif %}
     </div>
-
-{% else %}
-    <div class="section">
-        <form method="post">
-            {% csrf_token %}
-
-            <div class="form-group">
-                <label for="title">Title</label>
-                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
-            </div>
-
-            <div class="form-group">
-                <label for="status">Status</label>
-                <select name="status" id="status">
-                    <option value="todo" {% if metadata.status == 'todo' %}selected{% endif %}>todo</option>
-                    <option value="in_progress" {% if metadata.status == 'in_progress' %}selected{% endif %}>in progress</option>
-                    <option value="done" {% if metadata.status == 'done' %}selected{% endif %}>done</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="priority">Priority</label>
-                <select name="priority" id="priority">
-                    <option value="">None</option>
-                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>1 (Highest)</option>
-                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>2</option>
-                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>3</option>
-                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>4</option>
-                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>5 (Lowest)</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="due_date">Due Date/Time</label>
-                <input type="datetime-local" name="due_date" id="due_date" value="{% if metadata.due_date and metadata.due_date|length == 10 %}{{ metadata.due_date }}T00:00{% else %}{{ metadata.due_date }}{% endif %}">
-            </div>
-
-            <div class="form-group">
-                <label for="labels">Labels (comma-separated)</label>
-                <input type="text" name="labels" id="labels" value="{{ metadata.labels|join:', ' }}">
-            </div>
-
-            <div class="form-group">
-                <label for="content">Description (markdown)</label>
-                <textarea name="content" id="content">{{ content }}</textarea>
-            </div>
-
-            <div class="form-actions">
-                <button type="submit">Save Changes</button>
-                <a href="{% url 'subtask_detail' project=project epic=epic task=task subtask=subtask %}" class="button button-secondary">Cancel</a>
-            </div>
-        </form>
-    </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -454,6 +430,9 @@
         updateEditor.codemirror.on('change', function() {
             updateTextarea.value = updateEditor.value();
         });
+        
+        // Initialize @mention autocomplete for update editor
+        initMentionAutocomplete(updateEditor);
         
         // Handle clipboard image paste (Ctrl+V)
         updateEditor.codemirror.on('paste', function(cm, e) {
@@ -688,7 +667,7 @@
     var activityList = document.getElementById('activity-list');
     
     function updateActivityFilter() {
-        if (!activityList) return;
+        if (!activityList || !filterSystem || !filterUser) return;
         var showSystem = filterSystem.checked;
         var showUser = filterUser.checked;
         
@@ -704,5 +683,351 @@
     
     if (filterSystem) filterSystem.addEventListener('change', updateActivityFilter);
     if (filterUser) filterUser.addEventListener('change', updateActivityFilter);
+    updateActivityFilter(); // Apply filter on page load
+</script>
+
+<!-- Move Subtask Modal -->
+<div class="help-modal" id="move-subtask-modal">
+    <div class="help-modal-content">
+        <div class="help-modal-header">
+            <h3>Move Subtask</h3>
+            <button class="help-modal-close" id="move-subtask-close">&times;</button>
+        </div>
+        <div class="help-content">
+            <form id="move-subtask-form">
+                <div class="form-group">
+                    <label for="move-target-project">Project</label>
+                    <select name="target_project" id="move-target-project" required>
+                        <option value="">Select Project...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="move-target-epic">Epic (optional)</label>
+                    <select name="target_epic" id="move-target-epic">
+                        <option value="">None (Direct Task)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="move-target-task">Task</label>
+                    <select name="target_task" id="move-target-task" required disabled>
+                        <option value="">Select Task...</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="submit">Move Subtask</button>
+                    <button type="button" id="move-subtask-cancel">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Move Subtask Modal
+var moveSubtaskButton = document.getElementById('move-subtask-button');
+var moveSubtaskModal = document.getElementById('move-subtask-modal');
+var moveSubtaskClose = document.getElementById('move-subtask-close');
+var moveSubtaskCancel = document.getElementById('move-subtask-cancel');
+var moveSubtaskForm = document.getElementById('move-subtask-form');
+var moveTargetProject = document.getElementById('move-target-project');
+var moveTargetEpic = document.getElementById('move-target-epic');
+var moveTargetTask = document.getElementById('move-target-task');
+var projectsLoaded = false;
+
+if (moveSubtaskButton && moveSubtaskModal) {
+    moveSubtaskButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        moveSubtaskModal.classList.add('show');
+        
+        // Load projects and tasks if not already loaded
+        if (!projectsLoaded) {
+            var url = '{% if epic %}{% url "move_subtask" project=project epic=epic task=task subtask=subtask %}{% else %}{% url "move_subtask_no_epic" project=project task=task subtask=subtask %}{% endif %}';
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.projects) {
+                    moveTargetProject.innerHTML = '<option value="">Select Project...</option>';
+                    data.projects.forEach(function(project) {
+                        var option = document.createElement('option');
+                        option.value = project.id;
+                        option.textContent = project.title;
+                        option.dataset.epics = JSON.stringify(project.epics || []);
+                        option.dataset.directTasks = JSON.stringify(project.direct_tasks || []);
+                        moveTargetProject.appendChild(option);
+                    });
+                    projectsLoaded = true;
+                }
+            })
+            .catch(function(err) {
+                alert('Error loading projects: ' + err.message);
+            });
+        }
+    });
+    
+    if (moveSubtaskClose) {
+        moveSubtaskClose.addEventListener('click', function(e) {
+            e.stopPropagation();
+            moveSubtaskModal.classList.remove('show');
+        });
+    }
+    
+    if (moveSubtaskCancel) {
+        moveSubtaskCancel.addEventListener('click', function(e) {
+            e.preventDefault();
+            moveSubtaskModal.classList.remove('show');
+        });
+    }
+    
+    // Update epics and tasks when project changes
+    if (moveTargetProject) {
+        moveTargetProject.addEventListener('change', function() {
+            var selectedOption = this.options[this.selectedIndex];
+            var epics = selectedOption.dataset.epics ? JSON.parse(selectedOption.dataset.epics) : [];
+            var directTasks = selectedOption.dataset.directTasks ? JSON.parse(selectedOption.dataset.directTasks) : [];
+            
+            // Update epics dropdown
+            moveTargetEpic.innerHTML = '<option value="">None (Direct Task)</option>';
+            epics.forEach(function(epic) {
+                var option = document.createElement('option');
+                option.value = epic.id;
+                option.textContent = (epic.seq_id ? epic.seq_id + ' ' : '') + epic.title;
+                option.dataset.tasks = JSON.stringify(epic.tasks || []);
+                moveTargetEpic.appendChild(option);
+            });
+            
+            // Update tasks dropdown with direct tasks
+            moveTargetTask.innerHTML = '<option value="">Select Task...</option>';
+            directTasks.forEach(function(task) {
+                var option = document.createElement('option');
+                option.value = task.id;
+                option.textContent = (task.seq_id ? task.seq_id + ' ' : '') + task.title;
+                moveTargetTask.appendChild(option);
+            });
+            moveTargetTask.disabled = directTasks.length === 0 && epics.length === 0;
+            
+            // Trigger epic change to load epic tasks
+            if (epics.length > 0) {
+                moveTargetEpic.dispatchEvent(new Event('change'));
+            }
+        });
+    }
+    
+    // Update tasks when epic changes
+    if (moveTargetEpic) {
+        moveTargetEpic.addEventListener('change', function() {
+            var selectedOption = this.options[this.selectedIndex];
+            var tasks = selectedOption.dataset.tasks ? JSON.parse(selectedOption.dataset.tasks) : [];
+            
+            moveTargetTask.innerHTML = '<option value="">Select Task...</option>';
+            tasks.forEach(function(task) {
+                var option = document.createElement('option');
+                option.value = task.id;
+                option.textContent = (task.seq_id ? task.seq_id + ' ' : '') + task.title;
+                moveTargetTask.appendChild(option);
+            });
+            moveTargetTask.disabled = !tasks.length;
+        });
+    }
+    
+    // Handle form submission
+    if (moveSubtaskForm) {
+        moveSubtaskForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(moveSubtaskForm);
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+            
+            var url = '{% if epic %}{% url "move_subtask" project=project epic=epic task=task subtask=subtask %}{% else %}{% url "move_subtask_no_epic" project=project task=task subtask=subtask %}{% endif %}';
+            fetch(url, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Redirect to new subtask location
+                    window.location.href = data.url;
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to move subtask'));
+                }
+            })
+            .catch(function(err) {
+                alert('Error: ' + err.message);
+            });
+        });
+    }
+    
+    // Close modal when clicking outside
+    moveSubtaskModal.addEventListener('click', function(e) {
+        if (e.target === moveSubtaskModal) {
+            moveSubtaskModal.classList.remove('show');
+        }
+    });
+}
+
+    // Description editing
+    var descriptionEditBtn = document.getElementById('description-edit-btn');
+    var descriptionDisplay = document.getElementById('description-display');
+    var descriptionEditorContainer = document.getElementById('description-editor-container');
+    var descriptionEditor = document.getElementById('description-editor');
+    var descriptionSaveBtn = document.getElementById('description-save-btn');
+    var descriptionCancelBtn = document.getElementById('description-cancel-btn');
+    var descriptionMDE = null;
+    var originalContent = descriptionEditor ? descriptionEditor.value : '';
+
+    if (descriptionEditBtn && descriptionEditor) {
+        descriptionEditBtn.addEventListener('click', function() {
+            // Hide display and edit button
+            descriptionDisplay.style.display = 'none';
+            descriptionEditBtn.style.display = 'none';
+            
+            // Show editor container
+            descriptionEditorContainer.style.display = 'block';
+            
+            // Initialize EasyMDE if not already initialized
+            if (!descriptionMDE) {
+                descriptionMDE = new EasyMDE({
+                    element: descriptionEditor,
+                    spellChecker: false,
+                    toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                    minHeight: '200px',
+                    placeholder: 'Enter description... (Markdown supported)',
+                    status: false,
+                    autosave: {
+                        enabled: false
+                    }
+                });
+                originalContent = descriptionMDE.value();
+                
+                // Initialize @mention autocomplete for description editor
+                initMentionAutocomplete(descriptionMDE);
+                
+                // Handle clipboard image paste (Ctrl+V)
+                descriptionMDE.codemirror.on('paste', function(cm, e) {
+                    var clipboardData = e.clipboardData || window.clipboardData;
+                    if (!clipboardData) return;
+                    
+                    var items = clipboardData.items;
+                    if (!items) return;
+                    
+                    // Check if clipboard contains image
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            e.preventDefault();
+                            var file = items[i].getAsFile();
+                            
+                            // Show loading indicator
+                            var cursor = cm.getCursor();
+                            var loadingText = '![Uploading image...]()';
+                            cm.replaceRange(loadingText, cursor);
+                            
+                            // Upload image
+                            var formData = new FormData();
+                            formData.append('image', file);
+                            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                            
+                            fetch('{% url "upload_image" %}', {
+                                method: 'POST',
+                                body: formData,
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                }
+                            })
+                            .then(function(response) {
+                                return response.json();
+                            })
+                            .then(function(data) {
+                                if (data.success) {
+                                    // Replace loading text with markdown image
+                                    var markdownImage = '![' + file.name + '](' + data.url + ')';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, markdownImage);
+                                    cm.setValue(content);
+                                } else {
+                                    // Replace loading text with error message
+                                    var errorText = '![Image upload failed: ' + (data.error || 'Unknown error') + ']()';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, errorText);
+                                    cm.setValue(content);
+                                }
+                            })
+                            .catch(function(err) {
+                                // Replace loading text with error message
+                                var errorText = '![Image upload failed: Network error]()';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, errorText);
+                                cm.setValue(content);
+                            });
+                            
+                            return;
+                        }
+                    }
+                });
+            } else {
+                descriptionMDE.value(originalContent);
+            }
+        });
+
+        if (descriptionSaveBtn) {
+            descriptionSaveBtn.addEventListener('click', function() {
+                var content = descriptionMDE ? descriptionMDE.value() : descriptionEditor.value;
+                var formData = new FormData();
+                formData.append('quick_update', 'description');
+                formData.append('description', content);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+                var url = '{% if epic %}{% url "subtask_detail" project=project epic=epic task=task subtask=subtask %}{% else %}{% url "subtask_detail_no_epic" project=project task=task subtask=subtask %}{% endif %}';
+                fetch(url, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        // Update display with rendered markdown
+                        descriptionDisplay.innerHTML = data.content || '<span style="color: #828282;">No description</span>';
+                        originalContent = content;
+                        
+                        // Switch back to view mode
+                        descriptionEditorContainer.style.display = 'none';
+                        descriptionDisplay.style.display = 'block';
+                        descriptionEditBtn.style.display = 'block';
+                    } else {
+                        alert('Error saving description');
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error saving description:', err);
+                    alert('Error saving description');
+                });
+            });
+        }
+
+        if (descriptionCancelBtn) {
+            descriptionCancelBtn.addEventListener('click', function() {
+                // Restore original content
+                if (descriptionMDE) {
+                    descriptionMDE.value(originalContent);
+                } else {
+                    descriptionEditor.value = originalContent;
+                }
+                
+                // Switch back to view mode
+                descriptionEditorContainer.style.display = 'none';
+                descriptionDisplay.style.display = 'block';
+                descriptionEditBtn.style.display = 'block';
+            });
+        }
+    }
 </script>
 {% endblock %}

@@ -3,9 +3,13 @@
 {% block content %}
 <div class="breadcrumb">
     <a href="{% url 'project_list' %}">projects</a> &gt;
-    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
-    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a> &gt;
-    <a href="{% url 'task_detail' project=project epic=epic task=task %}">{{ task_title }}</a> &gt;
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a>{% if epic %} &gt;
+    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a>{% endif %} &gt;
+    {% if epic %}
+    <a href="{% url 'task_detail' project=project epic=epic task=task %}">{{ task_title }}</a>
+    {% else %}
+    <a href="{% url 'task_detail_no_epic' project=project task=task %}">{{ task_title }}</a>
+    {% endif %} &gt;
     new subtask
 </div>
 
@@ -23,9 +27,13 @@
         <div class="form-group">
             <label for="status">Status</label>
             <select name="status" id="status">
-                <option value="todo">todo</option>
-                <option value="in_progress">in progress</option>
-                <option value="done">done</option>
+                <option value="todo">Todo</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+                <option value="on_hold">On Hold</option>
+                <option value="blocked">Blocked</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="next">Next</option>
             </select>
         </div>
 
@@ -58,7 +66,11 @@
 
         <div class="form-actions">
             <button type="submit">Create Subtask</button>
+            {% if epic %}
             <a href="{% url 'task_detail' project=project epic=epic task=task %}" class="button button-secondary">Cancel</a>
+            {% else %}
+            <a href="{% url 'task_detail_no_epic' project=project task=task %}" class="button button-secondary">Cancel</a>
+            {% endif %}
         </div>
     </form>
 </div>

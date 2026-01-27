@@ -23,16 +23,24 @@ from pm import views
 import os
 
 urlpatterns = [
+    path('admin/', admin.site.urls),
     path('', views.project_list, name='project_list'),
     path('project/new/', views.new_project, name='new_project'),
     path('project/<str:project>/', views.project_detail, name='project_detail'),
     path('project/<str:project>/epic/new/', views.new_epic, name='new_epic'),
+    path('project/<str:project>/epic/<str:epic>/', views.epic_detail, name='epic_detail'),
+    # Task routes with epic (existing)
     path('project/<str:project>/epic/<str:epic>/new-task/', views.new_task, name='new_task'),
     path('project/<str:project>/epic/<str:epic>/task/<str:task>/', views.task_detail, name='task_detail'),
     path('project/<str:project>/epic/<str:epic>/task/<str:task>/new-subtask/', views.new_subtask, name='new_subtask'),
     path('project/<str:project>/epic/<str:epic>/task/<str:task>/subtask/<str:subtask>/', 
          views.subtask_detail, name='subtask_detail'),
-    path('project/<str:project>/epic/<str:epic>/', views.epic_detail, name='epic_detail'),
+    # Task routes without epic (new)
+    path('project/<str:project>/new-task/', views.new_task, name='new_task_no_epic'),
+    path('project/<str:project>/task/<str:task>/', views.task_detail_no_epic, name='task_detail_no_epic'),
+    path('project/<str:project>/task/<str:task>/new-subtask/', views.new_subtask_no_epic, name='new_subtask_no_epic'),
+    path('project/<str:project>/task/<str:task>/subtask/<str:subtask>/', 
+         views.subtask_detail_no_epic, name='subtask_detail_no_epic'),
     path('calendar/', views.calendar_view, name='calendar'),
     path('calendar/day/<str:date_str>/', views.calendar_day, name='calendar_day'),
     path('calendar/week/<int:year>/<int:week>/', views.calendar_week, name='calendar_week'),
@@ -51,6 +59,10 @@ urlpatterns = [
     path('inbox/', views.inbox_view, name='inbox'),
     path('api/quick-add/', views.quick_add, name='quick_add'),
     path('project/<str:project>/epic/<str:epic>/task/<str:task>/move/', views.move_task, name='move_task'),
+    path('project/<str:project>/task/<str:task>/move/', views.move_task_no_epic, name='move_task_no_epic'),
+    path('project/<str:project>/epic/<str:epic>/move/', views.move_epic, name='move_epic'),
+    path('project/<str:project>/epic/<str:epic>/task/<str:task>/subtask/<str:subtask>/move/', views.move_subtask, name='move_subtask'),
+    path('project/<str:project>/task/<str:task>/subtask/<str:subtask>/move/', views.move_subtask_no_epic, name='move_subtask_no_epic'),
     path('api/update-task-schedule/', views.update_task_schedule, name='update_task_schedule'),
     path('api/reorder-items/', views.reorder_items, name='reorder_items'),
     path('api/update-task-status/', views.update_task_status, name='update_task_status'),
@@ -59,18 +71,20 @@ urlpatterns = [
     path('api/dig/', views.dig_query, name='dig_query'),
     path('api/mac-lookup/', views.mac_lookup, name='mac_lookup'),
     path('api/upload-image/', views.upload_image, name='upload_image'),
+    path('api/search-persons/', views.search_persons, name='search_persons'),
 ]
 
 # Serve uploaded images in development
-# This must come BEFORE Django's static file serving
+# Using /uploads/ instead of /static/uploads/ to avoid conflict with Django's
+# staticfiles app which intercepts /static/ URLs before URL routing
 if settings.DEBUG:
     uploads_dir = os.path.join(settings.DATA_ROOT, 'uploads')
-    if os.path.exists(uploads_dir):
-        # Serve files from data/uploads/ at /static/uploads/
-        # This matches URLs like /static/uploads/2026/01/filename.png
-        # and serves files from data/uploads/2026/01/filename.png
-        urlpatterns.insert(0, re_path(
-            r'^static/uploads/(?P<path>.*)$',
-            serve,
-            {'document_root': uploads_dir, 'show_indexes': False}
-        ))
+    # Always add URL pattern in DEBUG mode - directory will be created on first upload
+    # Serve files from data/uploads/ at /uploads/
+    # This matches URLs like /uploads/2026/01/filename.png
+    # and serves files from data/uploads/2026/01/filename.png
+    urlpatterns.insert(0, re_path(
+        r'^uploads/(?P<path>.*)$',
+        serve,
+        {'document_root': uploads_dir, 'show_indexes': False}
+    ))

@@ -4,7 +4,6 @@ from pm.views import (
     validate_id, safe_join_path, is_valid_project_id,
     INBOX_PROJECT_ID, ensure_inbox_project, get_inbox_epic
 )
-from pm.utils import load_entity, save_entity
 from pm.models import ensure_index_tables
 import os
 from django.conf import settings
@@ -75,6 +74,7 @@ class ValidationTests(TestCase):
     
     def test_safe_join_path(self):
         """Test safe path joining prevents directory traversal."""
+        import logging
         base = settings.DATA_ROOT
         # Valid paths
         result = safe_join_path('projects', 'project-12345678')
@@ -82,24 +82,30 @@ class ValidationTests(TestCase):
         
         # Path traversal attempts should be blocked (raises Http404)
         from django.http import Http404
-        with self.assertRaises(Http404):
-            safe_join_path('projects', '../../../etc/passwd')
+        pm_logger = logging.getLogger('pm')  # utils.py uses logger = logging.getLogger('pm')
+        old_level = pm_logger.level
+        pm_logger.setLevel(logging.ERROR)
+        try:
+            with self.assertRaises(Http404):
+                safe_join_path('projects', '../../../etc/passwd')
+        finally:
+            pm_logger.setLevel(old_level)
 
 
 class InboxTests(TestCase):
-    """Tests for inbox functionality."""
-    
+    """Tests for inbox functionality (SQLite-backed)."""
+
+    def setUp(self):
+        ensure_index_tables()
+
     def test_ensure_inbox_project_creates_structure(self):
-        """Test that inbox project structure is created."""
+        """Test that inbox project and epic exist in the database."""
+        from pm.models import Entity
         ensure_inbox_project()
-        inbox_path = safe_join_path('projects', f'{INBOX_PROJECT_ID}.md')
-        self.assertTrue(os.path.exists(inbox_path))
-        
-        # Check that inbox epic exists
+        self.assertTrue(Entity.objects.filter(id=INBOX_PROJECT_ID, type='project').exists())
         epic_id = get_inbox_epic()
         self.assertIsNotNone(epic_id)
-        epic_path = safe_join_path('projects', INBOX_PROJECT_ID, 'epics', f'{epic_id}.md')
-        self.assertTrue(os.path.exists(epic_path))
+        self.assertTrue(Entity.objects.filter(id=epic_id, type='epic', project_id=INBOX_PROJECT_ID).exists())
 
 
 class URLTests(TestCase):

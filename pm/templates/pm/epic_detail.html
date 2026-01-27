@@ -12,8 +12,6 @@
     <span>{% if metadata.seq_id %}<span class="seq-id">{{ metadata.seq_id }}</span>{% endif %}{{ metadata.title }}</span>
     {% if not is_inbox_epic %}
     <div class="mode-toggle">
-        <a href="{% url 'epic_detail' project=project epic=epic %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
-        <a href="{% url 'epic_detail' project=project epic=epic %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
         <a href="{% url 'kanban_epic' project=project epic=epic %}">kanban</a>
         {% if not metadata.archived %}
         <form method="post">
@@ -28,6 +26,7 @@
             <button type="submit">Unarchive</button>
         </form>
         {% endif %}
+        <button class="move-epic-button" id="move-epic-button">Move</button>
     </div>
     {% endif %}
 </div>
@@ -158,18 +157,24 @@
         </div>
     </div>
     
-    {% if content %}
-    <div class="overview-row overview-description">
+    <div class="overview-row overview-description" id="description-container" style="position: relative;">
+        <button class="description-edit-btn" id="description-edit-btn" style="position: absolute; top: 8px; right: 8px;">edit</button>
         <div class="overview-field overview-field-full">
             <span class="field-label">Description</span>
-            <div class="field-value content">{{ content|markdownify|safe }}</div>
+            <div class="field-value content" id="description-display">
+                {% if content %}{{ content|markdownify|safe }}{% else %}<span style="color: #828282;">No description</span>{% endif %}
+            </div>
+            <div id="description-editor-container" style="display: none; margin-top: 10px;">
+                <textarea id="description-editor">{% if content %}{{ content }}{% endif %}</textarea>
+                <div class="description-actions" style="margin-top: 10px;">
+                    <button type="button" id="description-save-btn">Save</button>
+                    <button type="button" id="description-cancel-btn">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
-    {% endif %}
 </div>
 {% endif %}
-
-{% if not edit_mode %}
 
     {% if not is_inbox_epic %}
     <!-- Checklist Section -->
@@ -265,9 +270,13 @@
                 <option value="5">P5</option>
             </select>
             <select name="status">
-                <option value="todo">todo</option>
-                <option value="in_progress">in progress</option>
-                <option value="done">done</option>
+                <option value="todo">Todo</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+                <option value="on_hold">On Hold</option>
+                <option value="blocked">Blocked</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="next">Next</option>
             </select>
             {% endif %}
             <button type="submit">Create</button>
@@ -286,6 +295,10 @@
                 <option value="todo">Todo</option>
                 <option value="in_progress">In Progress</option>
                 <option value="done">Done</option>
+                <option value="on_hold">On Hold</option>
+                <option value="blocked">Blocked</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="next">Next</option>
             </select>
             <select id="bulk-priority">
                 <option value="">Set Priority...</option>
@@ -326,14 +339,14 @@
             </thead>
             <tbody id="tasks-tbody">
             {% for task in tasks %}
-            <tr class="draggable-row task-row" draggable="true" data-task-id="{{ task.id }}" 
+            <tr class="draggable-row task-row" data-task-id="{{ task.id }}" 
                 data-status="{{ task.status }}" 
                 data-priority="{{ task.priority|default:'999' }}" 
                 data-title="{{ task.title|lower }}" 
                 data-created="{{ task.created|default:'9999-99-99' }}" 
                 data-due-date="{{ task.due_date|default:'9999-99-99' }}">
                 <td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="{{ task.id }}"></td>
-                <td><span class="badge badge-status status-{{ task.status }}">{{ task.status }}</span></td>
+                <td><span class="badge badge-status status-{{ task.status }}">{{ task.status_display|default:task.status }}</span></td>
                 <td>{% if task.priority %}<span class="badge badge-priority priority-{{ task.priority }}">P{{ task.priority }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
                 <td>{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}<a href="{% url 'task_detail' project=project epic=epic task=task.id %}">{{ task.title }}</a></td>
                 <td>{% if task.created %}{{ task.created }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
@@ -345,50 +358,6 @@
         {% endif %}
         <div id="tasks-empty" class="empty"{% if tasks %} style="display: none;"{% endif %}>No tasks yet.</div>
     </div>
-
-{% else %}
-    <div class="section">
-        <form method="post">
-            {% csrf_token %}
-
-            <div class="form-group">
-                <label for="title">Title</label>
-                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
-            </div>
-
-            <div class="form-group">
-                <label for="status">Status</label>
-                <select name="status" id="status">
-                    <option value="active" {% if metadata.status == 'active' %}selected{% endif %}>active</option>
-                    <option value="completed" {% if metadata.status == 'completed' %}selected{% endif %}>completed</option>
-                    <option value="canceled" {% if metadata.status == 'canceled' %}selected{% endif %}>canceled</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="priority">Priority</label>
-                <select name="priority" id="priority">
-                    <option value="">None</option>
-                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>1 (Highest)</option>
-                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>2</option>
-                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>3</option>
-                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>4</option>
-                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>5 (Lowest)</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="content">Description (markdown)</label>
-                <textarea name="content" id="content">{{ content }}</textarea>
-            </div>
-
-            <div class="form-actions">
-                <button type="submit">Save Changes</button>
-                <a href="{% url 'epic_detail' project=project epic=epic %}" class="button button-secondary">Cancel</a>
-            </div>
-        </form>
-    </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -435,7 +404,6 @@
                     // Create new row
                     var tr = document.createElement('tr');
                     tr.className = 'draggable-row task-row';
-                    tr.draggable = true;
                     tr.setAttribute('data-task-id', data.id);
                     tr.setAttribute('data-status', data.status);
                     tr.setAttribute('data-priority', data.priority || '999');
@@ -447,7 +415,7 @@
                     var createdHtml = data.created || '<span class="text-muted">—</span>';
                     var dueDateHtml = data.due_date || '<span class="text-muted">—</span>';
                     tr.innerHTML = '<td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="' + data.id + '"></td>' +
-                        '<td><span class="badge badge-status status-' + data.status + '">' + data.status.replace('_', ' ') + '</span></td>' +
+                        '<td><span class="badge badge-status status-' + data.status + '">' + (data.status_display || data.status.replace('_', ' ')) + '</span></td>' +
                         '<td>' + priorityHtml + '</td>' +
                         '<td>' + seqIdHtml + '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a></td>' +
                         '<td>' + createdHtml + '</td>' +
@@ -456,9 +424,6 @@
                     
                     // Add checkbox handler to new row
                     tr.querySelector('.task-checkbox').addEventListener('change', updateBulkBar);
-                    
-                    // Add drag handlers to new row
-                    addDragHandlers(tr);
                     
                     // Reset form
                     taskForm.reset();
@@ -475,50 +440,6 @@
         var div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
-    }
-
-    // Drag-and-drop ordering for tasks
-    var draggedRow = null;
-    
-    function addDragHandlers(row) {
-        row.addEventListener('dragstart', function(e) {
-            draggedRow = row;
-            row.classList.add('dragging');
-        });
-
-        row.addEventListener('dragend', function() {
-            row.classList.remove('dragging');
-            draggedRow = null;
-        });
-
-        row.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            if (draggedRow && draggedRow !== row) {
-                var rect = row.getBoundingClientRect();
-                var next = (e.clientY - rect.top) > (rect.height / 2);
-                row.parentNode.insertBefore(draggedRow, next ? row.nextSibling : row);
-            }
-        });
-        
-        row.addEventListener('drop', function() {
-            persistTaskOrder();
-        });
-    }
-
-    document.querySelectorAll('.task-row').forEach(addDragHandlers);
-
-    function persistTaskOrder() {
-        var ids = Array.from(document.querySelectorAll('.task-row')).map(function(r) {
-            return r.getAttribute('data-task-id');
-        });
-        var formData = new FormData();
-        formData.append('type', 'task');
-        formData.append('project_id', '{{ project }}');
-        formData.append('epic_id', '{{ epic }}');
-        formData.append('order', ids.join(','));
-        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
-
-        fetch('{% url "reorder_items" %}', { method: 'POST', body: formData });
     }
 
     // Bulk selection and actions
@@ -812,5 +733,293 @@
             indicator.textContent = sortDirection[column] === 'asc' ? '↑' : '↓';
         });
     });
+</script>
+
+<!-- Move Epic Modal -->
+<div class="help-modal" id="move-epic-modal">
+    <div class="help-modal-content">
+        <div class="help-modal-header">
+            <h3>Move Epic</h3>
+            <button class="help-modal-close" id="move-epic-close">&times;</button>
+        </div>
+        <div class="help-content">
+            <form id="move-epic-form">
+                <div class="form-group">
+                    <label for="move-target-project">Project</label>
+                    <select name="target_project" id="move-target-project" required>
+                        <option value="">Select Project...</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="submit">Move Epic</button>
+                    <button type="button" id="move-epic-cancel">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Move Epic Modal
+var moveEpicButton = document.getElementById('move-epic-button');
+var moveEpicModal = document.getElementById('move-epic-modal');
+var moveEpicClose = document.getElementById('move-epic-close');
+var moveEpicCancel = document.getElementById('move-epic-cancel');
+var moveEpicForm = document.getElementById('move-epic-form');
+var moveTargetProject = document.getElementById('move-target-project');
+var projectsLoaded = false;
+
+if (moveEpicButton && moveEpicModal) {
+    moveEpicButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        moveEpicModal.classList.add('show');
+        
+        // Load projects if not already loaded
+        if (!projectsLoaded) {
+            fetch('{% url "move_epic" project=project epic=epic %}', {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.projects) {
+                    moveTargetProject.innerHTML = '<option value="">Select Project...</option>';
+                    data.projects.forEach(function(project) {
+                        var option = document.createElement('option');
+                        option.value = project.id;
+                        option.textContent = project.title;
+                        moveTargetProject.appendChild(option);
+                    });
+                    projectsLoaded = true;
+                }
+            })
+            .catch(function(err) {
+                alert('Error loading projects: ' + err.message);
+            });
+        }
+    });
+    
+    if (moveEpicClose) {
+        moveEpicClose.addEventListener('click', function(e) {
+            e.stopPropagation();
+            moveEpicModal.classList.remove('show');
+        });
+    }
+    
+    if (moveEpicCancel) {
+        moveEpicCancel.addEventListener('click', function(e) {
+            e.preventDefault();
+            moveEpicModal.classList.remove('show');
+        });
+    }
+    
+    // Handle form submission
+    if (moveEpicForm) {
+        moveEpicForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(moveEpicForm);
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+            
+            fetch('{% url "move_epic" project=project epic=epic %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Redirect to new epic location
+                    window.location.href = data.url;
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to move epic'));
+                }
+            })
+            .catch(function(err) {
+                alert('Error: ' + err.message);
+            });
+        });
+    }
+    
+    // Close modal when clicking outside (on backdrop only)
+    moveEpicModal.addEventListener('click', function(e) {
+        // Only close if clicking directly on the backdrop, not on the content
+        if (e.target === moveEpicModal) {
+            moveEpicModal.classList.remove('show');
+        }
+    });
+    
+    // Prevent clicks inside modal content from closing the modal
+    var moveEpicContent = moveEpicModal.querySelector('.help-modal-content');
+    if (moveEpicContent) {
+        moveEpicContent.addEventListener('click', function(e) {
+            // Don't stop propagation on select elements - let them work normally
+            if (e.target.tagName !== 'SELECT' && !e.target.closest('select')) {
+                e.stopPropagation();
+            }
+        });
+    }
+}
+
+    // Description editing
+    var descriptionEditBtn = document.getElementById('description-edit-btn');
+    var descriptionDisplay = document.getElementById('description-display');
+    var descriptionEditorContainer = document.getElementById('description-editor-container');
+    var descriptionEditor = document.getElementById('description-editor');
+    var descriptionSaveBtn = document.getElementById('description-save-btn');
+    var descriptionCancelBtn = document.getElementById('description-cancel-btn');
+    var descriptionMDE = null;
+    var originalContent = descriptionEditor ? descriptionEditor.value : '';
+
+    if (descriptionEditBtn && descriptionEditor) {
+        descriptionEditBtn.addEventListener('click', function() {
+            // Hide display and edit button
+            descriptionDisplay.style.display = 'none';
+            descriptionEditBtn.style.display = 'none';
+            
+            // Show editor container
+            descriptionEditorContainer.style.display = 'block';
+            
+            // Initialize EasyMDE if not already initialized
+            if (!descriptionMDE) {
+                descriptionMDE = new EasyMDE({
+                    element: descriptionEditor,
+                    spellChecker: false,
+                    toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                    minHeight: '200px',
+                    placeholder: 'Enter description... (Markdown supported)',
+                    status: false,
+                    autosave: {
+                        enabled: false
+                    }
+                });
+                originalContent = descriptionMDE.value();
+                
+                // Initialize @mention autocomplete for description editor
+                initMentionAutocomplete(descriptionMDE);
+                
+                // Handle clipboard image paste (Ctrl+V)
+                descriptionMDE.codemirror.on('paste', function(cm, e) {
+                    var clipboardData = e.clipboardData || window.clipboardData;
+                    if (!clipboardData) return;
+                    
+                    var items = clipboardData.items;
+                    if (!items) return;
+                    
+                    // Check if clipboard contains image
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            e.preventDefault();
+                            var file = items[i].getAsFile();
+                            
+                            // Show loading indicator
+                            var cursor = cm.getCursor();
+                            var loadingText = '![Uploading image...]()';
+                            cm.replaceRange(loadingText, cursor);
+                            
+                            // Upload image
+                            var formData = new FormData();
+                            formData.append('image', file);
+                            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                            
+                            fetch('{% url "upload_image" %}', {
+                                method: 'POST',
+                                body: formData,
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                }
+                            })
+                            .then(function(response) {
+                                return response.json();
+                            })
+                            .then(function(data) {
+                                if (data.success) {
+                                    // Replace loading text with markdown image
+                                    var markdownImage = '![' + file.name + '](' + data.url + ')';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, markdownImage);
+                                    cm.setValue(content);
+                                } else {
+                                    // Replace loading text with error message
+                                    var errorText = '![Image upload failed: ' + (data.error || 'Unknown error') + ']()';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, errorText);
+                                    cm.setValue(content);
+                                }
+                            })
+                            .catch(function(err) {
+                                // Replace loading text with error message
+                                var errorText = '![Image upload failed: Network error]()';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, errorText);
+                                cm.setValue(content);
+                            });
+                            
+                            return;
+                        }
+                    }
+                });
+            } else {
+                descriptionMDE.value(originalContent);
+            }
+        });
+
+        if (descriptionSaveBtn) {
+            descriptionSaveBtn.addEventListener('click', function() {
+                var content = descriptionMDE ? descriptionMDE.value() : descriptionEditor.value;
+                var formData = new FormData();
+                formData.append('quick_update', 'description');
+                formData.append('description', content);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+                fetch('{% url "epic_detail" project=project epic=epic %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        // Update display with rendered markdown
+                        descriptionDisplay.innerHTML = data.content || '<span style="color: #828282;">No description</span>';
+                        originalContent = content;
+                        
+                        // Switch back to view mode
+                        descriptionEditorContainer.style.display = 'none';
+                        descriptionDisplay.style.display = 'block';
+                        descriptionEditBtn.style.display = 'block';
+                    } else {
+                        alert('Error saving description');
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error saving description:', err);
+                    alert('Error saving description');
+                });
+            });
+        }
+
+        if (descriptionCancelBtn) {
+            descriptionCancelBtn.addEventListener('click', function() {
+                // Restore original content
+                if (descriptionMDE) {
+                    descriptionMDE.value(originalContent);
+                } else {
+                    descriptionEditor.value = originalContent;
+                }
+                
+                // Switch back to view mode
+                descriptionEditorContainer.style.display = 'none';
+                descriptionDisplay.style.display = 'block';
+                descriptionEditBtn.style.display = 'block';
+            });
+        }
+    }
 </script>
 {% endblock %}

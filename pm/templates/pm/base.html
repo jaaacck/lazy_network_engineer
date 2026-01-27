@@ -25,11 +25,9 @@
                 <span class="nav-spacer"></span>
                 <a href="{% url 'people_list' %}">people</a>
             </nav>
-            <form class="nav-search" action="{% url 'search' %}" method="get">
-                <input type="text" name="q" placeholder="Search..." value="{{ request.GET.q|default:'' }}">
-            </form>
+            <span class="nav-spacer"></span>
             <div class="toolbox-dropdown">
-                <button class="toolbox-toggle" id="toolbox-toggle">Toolbox</button>
+                <button class="toolbox-toggle" id="toolbox-toggle">toolbox</button>
                 <div class="toolbox-menu" id="toolbox-menu">
                     <a href="#" class="toolbox-item" id="subnet-calculator-link">Subnet Calculator</a>
                     <a href="#" class="toolbox-item" id="whois-link">Whois</a>
@@ -38,8 +36,11 @@
                     <a href="#" class="toolbox-item">BGP Looking Glass</a>
                 </div>
             </div>
-            <button class="nav-quick-add" id="quick-add-button">Quick Add</button>
-            <a href="#" class="nav-help" id="help-button">Help</a>
+            <button class="nav-quick-add" id="quick-add-button">quick add</button>
+            <a href="#" class="nav-help" id="help-button">help</a>
+            <form class="nav-search" action="{% url 'search' %}" method="get">
+                <input type="text" name="q" placeholder="Search..." value="{{ request.GET.q|default:'' }}">
+            </form>
         </div>
     </div>
 
@@ -105,9 +106,13 @@
                     <div class="form-group">
                         <label for="quick-task-status">Status</label>
                         <select name="status" id="quick-task-status">
-                            <option value="todo" selected>todo</option>
-                            <option value="in_progress">in progress</option>
-                            <option value="done">done</option>
+                            <option value="todo" selected>Todo</option>
+                            <option value="in_progress">In Progress</option>
+                            <option value="done">Done</option>
+                            <option value="on_hold">On Hold</option>
+                            <option value="blocked">Blocked</option>
+                            <option value="cancelled">Cancelled</option>
+                            <option value="next">Next</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -147,13 +152,13 @@
                     <li><strong>Django:</strong> {% django_version %}</li>
                     <li><strong>Python:</strong> {% python_version %}</li>
                 </ul>
-                <p style="margin-top: 12px; margin-bottom: 0;">
-                    <a href="#" id="changelog-link" style="color: #ff6600; text-decoration: underline; cursor: pointer;">View Changelog</a>
+                <p style="margin-top: 10px; margin-bottom: 0;">
+                    <a href="#" id="changelog-link" style="color: #ff6600; text-decoration: underline; cursor: pointer;">View Changelog</a> (from CHANGELOG.md)
                 </p>
                 
-                <div id="changelog-content" style="display: none; margin-top: 16px; padding: 12px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 3px; max-height: 400px; overflow-y: auto;">
-                    <h4 style="margin-top: 0; margin-bottom: 12px; color: #ff6600;">Changelog</h4>
-                    <div id="changelog-text" style="font-size: 9pt; line-height: 1.6; color: #333;"></div>
+                <div id="changelog-content" style="display: none; margin-top: 12px; padding: 10px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 2px; max-height: 400px; overflow-y: auto;">
+                    <h4 style="margin-top: 0; margin-bottom: 8px; color: #ff6600;">Changelog</h4>
+                    <div id="changelog-text" style="font-size: 9pt; line-height: 1.5; color: #000;"></div>
                 </div>
                 
                 <h4>Keyboard Shortcuts</h4>
@@ -163,7 +168,6 @@
                     <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>M</kbd> - My work</li>
                     <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>T</kbd> - Today</li>
                     <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>C</kbd> - Calendar</li>
-                    <li><kbd>Alt</kbd>/<kbd>Cmd</kbd> + <kbd>E</kbd> - Toggle edit mode</li>
                     <li><kbd>Alt</kbd> + <kbd>S</kbd> (in input) - Save form</li>
                     <li><kbd>Esc</kbd> - Cancel/Go back</li>
                 </ul>
@@ -375,17 +379,8 @@
                     return;
                 }
                 if (!isInput && !isContentEditable) {
-                    var editLink = document.querySelector('a[href*="?edit=true"]');
                     var cancelLink = document.querySelector('a.button-secondary, a[href*="Cancel"]');
-                    if (editLink) {
-                        // Exit edit mode
-                        var viewLink = editLink.previousElementSibling || editLink.parentElement.querySelector('a:not([href*="edit"])');
-                        if (viewLink) {
-                            window.location.href = viewLink.href;
-                            e.preventDefault();
-                            e.stopPropagation();
-                        }
-                    } else if (cancelLink) {
+                    if (cancelLink) {
                         cancelLink.click();
                         e.preventDefault();
                         e.stopPropagation();
@@ -448,16 +443,6 @@
                     return false;
                 case 'c':
                     window.location.href = "{% url 'calendar' %}";
-                    return false;
-                case 'e':
-                    // Toggle edit mode
-                    var editLink = document.querySelector('a[href*="?edit=true"]');
-                    var viewLink = document.querySelector('a[href*="project"]:not([href*="edit"]):not([href*="new"])');
-                    if (editLink && !editLink.classList.contains('active')) {
-                        window.location.href = editLink.href;
-                    } else if (viewLink && window.location.search.includes('edit=true')) {
-                        window.location.href = viewLink.href;
-                    }
                     return false;
             }
         }, true); // Use capture phase to ensure we get the event first
@@ -537,16 +522,16 @@
                                 .then(function(text) {
                                     // Convert markdown to HTML (simple conversion)
                                     var html = text
-                                        .replace(/^# (.+)$/gm, '<h5 style="margin-top: 16px; margin-bottom: 8px; color: #ff6600; font-size: 11pt;">$1</h5>')
-                                        .replace(/^## (.+)$/gm, '<h6 style="margin-top: 12px; margin-bottom: 6px; font-weight: bold; font-size: 10pt;">$1</h6>')
-                                        .replace(/^### (.+)$/gm, '<strong style="display: block; margin-top: 8px; margin-bottom: 4px; font-size: 9pt;">$1</strong>')
+                                        .replace(/^# (.+)$/gm, '<h5 style="margin-top: 12px; margin-bottom: 6px; color: #ff6600; font-size: 11pt;">$1</h5>')
+                                        .replace(/^## (.+)$/gm, '<h6 style="margin-top: 10px; margin-bottom: 4px; font-weight: bold; font-size: 10pt;">$1</h6>')
+                                        .replace(/^### (.+)$/gm, '<strong style="display: block; margin-top: 6px; margin-bottom: 3px; font-size: 9pt;">$1</strong>')
                                         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                                        .replace(/^- (.+)$/gm, '<li style="margin-bottom: 4px;">$1</li>')
+                                        .replace(/^- (.+)$/gm, '<li style="margin-bottom: 3px;">$1</li>')
                                         .replace(/(<li[^>]*>.*?<\/li>)/gs, function(match) {
-                                            return '<ul style="margin: 8px 0 12px 0; padding-left: 20px;">' + match + '</ul>';
+                                            return '<ul style="margin: 6px 0 10px 0; padding-left: 18px;">' + match + '</ul>';
                                         })
                                         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #ff6600; text-decoration: underline;">$1</a>')
-                                        .replace(/\n\n/g, '</p><p style="margin: 8px 0;">')
+                                        .replace(/\n\n/g, '</p><p style="margin: 6px 0;">')
                                         .replace(/^/, '<p style="margin: 0;">')
                                         .replace(/$/, '</p>');
                                     changelogText.innerHTML = html;
@@ -1450,6 +1435,261 @@
                     });
                 });
             }
+        }
+        
+        // @Mention autocomplete for EasyMDE editors
+        function initMentionAutocomplete(easyMDEInstance) {
+            if (!easyMDEInstance || !easyMDEInstance.codemirror) {
+                return;
+            }
+            
+            var cm = easyMDEInstance.codemirror;
+            var dropdown = null;
+            var selectedIndex = -1;
+            var currentQuery = '';
+            var searchTimeout = null;
+            
+            // Create dropdown element
+            function createDropdown() {
+                if (dropdown) return dropdown;
+                dropdown = document.createElement('div');
+                dropdown.className = 'mention-dropdown';
+                dropdown.style.display = 'none';
+                document.body.appendChild(dropdown);
+                return dropdown;
+            }
+            
+            // Position dropdown near cursor
+            function positionDropdown() {
+                if (!dropdown) return;
+                var coords = cm.cursorCoords();
+                var editorElement = cm.getWrapperElement();
+                var editorRect = editorElement.getBoundingClientRect();
+                var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                var scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+                
+                dropdown.style.position = 'absolute';
+                dropdown.style.top = (coords.bottom + scrollTop) + 'px';
+                dropdown.style.left = (coords.left + scrollLeft) + 'px';
+            }
+            
+            // Show dropdown with persons
+            function showDropdown(persons) {
+                if (!dropdown) createDropdown();
+                dropdown.innerHTML = '';
+                selectedIndex = -1;
+                
+                if (!persons || persons.length === 0) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
+                
+                persons.forEach(function(person, index) {
+                    var option = document.createElement('div');
+                    option.className = 'mention-option';
+                    option.setAttribute('data-index', index);
+                    var button = document.createElement('button');
+                    button.textContent = person.display_name || person.name;
+                    button.setAttribute('data-name', person.name);
+                    option.appendChild(button);
+                    dropdown.appendChild(option);
+                });
+                
+                positionDropdown();
+                dropdown.style.display = 'block';
+            }
+            
+            // Hide dropdown
+            function hideDropdown() {
+                if (dropdown) {
+                    dropdown.style.display = 'none';
+                    selectedIndex = -1;
+                    currentQuery = '';
+                }
+            }
+            
+            // Search persons
+            function searchPersons(query) {
+                if (searchTimeout) {
+                    clearTimeout(searchTimeout);
+                }
+                
+                searchTimeout = setTimeout(function() {
+                    if (!query || query.length < 1) {
+                        hideDropdown();
+                        return;
+                    }
+                    
+                    fetch('{% url "search_persons" %}?q=' + encodeURIComponent(query))
+                        .then(function(response) {
+                            return response.json();
+                        })
+                        .then(function(data) {
+                            if (data.success && data.persons) {
+                                showDropdown(data.persons);
+                            } else {
+                                hideDropdown();
+                            }
+                        })
+                        .catch(function(err) {
+                            console.error('Error searching persons:', err);
+                            hideDropdown();
+                        });
+                }, 150); // Debounce search
+            }
+            
+            // Insert mention at cursor
+            function insertMention(personName) {
+                var cursor = cm.getCursor();
+                var line = cm.getLine(cursor.line);
+                var start = cursor.ch;
+                
+                // Find the @ symbol that started this mention
+                var mentionStart = start - 1;
+                while (mentionStart >= 0 && /[\w\s\-_]/.test(line[mentionStart])) {
+                    mentionStart--;
+                }
+                
+                if (mentionStart >= 0 && line[mentionStart] === '@') {
+                    // Replace from @ to cursor with @personName
+                    var before = line.substring(0, mentionStart + 1);
+                    var after = line.substring(start);
+                    var newLine = before + personName + ' ' + after;
+                    cm.replaceRange(newLine, {line: cursor.line, ch: mentionStart + 1}, {line: cursor.line, ch: start});
+                    
+                    // Move cursor after inserted name
+                    var newCursor = {line: cursor.line, ch: mentionStart + 1 + personName.length + 1};
+                    cm.setCursor(newCursor);
+                }
+                
+                hideDropdown();
+            }
+            
+            // Update selected index
+            function updateSelection() {
+                if (!dropdown) return;
+                var options = dropdown.querySelectorAll('.mention-option');
+                options.forEach(function(opt, idx) {
+                    if (idx === selectedIndex) {
+                        opt.classList.add('selected');
+                    } else {
+                        opt.classList.remove('selected');
+                    }
+                });
+            }
+            
+            // Handle keyboard navigation
+            function handleKeydown(e) {
+                if (!dropdown || dropdown.style.display === 'none') {
+                    return;
+                }
+                
+                var options = dropdown.querySelectorAll('.mention-option');
+                if (options.length === 0) return;
+                
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    selectedIndex = (selectedIndex + 1) % options.length;
+                    updateSelection();
+                    // Scroll into view
+                    options[selectedIndex].scrollIntoView({block: 'nearest'});
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    selectedIndex = selectedIndex <= 0 ? options.length - 1 : selectedIndex - 1;
+                    updateSelection();
+                    options[selectedIndex].scrollIntoView({block: 'nearest'});
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    if (selectedIndex >= 0 && selectedIndex < options.length) {
+                        var button = options[selectedIndex].querySelector('button');
+                        if (button) {
+                            insertMention(button.getAttribute('data-name'));
+                        }
+                    } else if (options.length > 0) {
+                        // Select first if none selected
+                        var button = options[0].querySelector('button');
+                        if (button) {
+                            insertMention(button.getAttribute('data-name'));
+                        }
+                    }
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    hideDropdown();
+                }
+            }
+            
+            // Handle input changes
+            cm.on('inputRead', function(cm, change) {
+                if (change.text && change.text.length > 0) {
+                    var cursor = cm.getCursor();
+                    var line = cm.getLine(cursor.line);
+                    var textBeforeCursor = line.substring(0, cursor.ch);
+                    
+                    // Check if we're typing after an @
+                    var lastAtIndex = textBeforeCursor.lastIndexOf('@');
+                    if (lastAtIndex >= 0) {
+                        // Check if there's whitespace or punctuation between @ and cursor
+                        var textAfterAt = textBeforeCursor.substring(lastAtIndex + 1);
+                        if (!/\s/.test(textAfterAt) && !/[^\w\s\-_]/.test(textAfterAt)) {
+                            // We're in a mention - extract query
+                            currentQuery = textAfterAt;
+                            searchPersons(currentQuery);
+                            return;
+                        }
+                    }
+                }
+                
+                // Hide dropdown if we're not in a mention
+                hideDropdown();
+            });
+            
+            // Handle cursor movement
+            cm.on('cursorActivity', function() {
+                var cursor = cm.getCursor();
+                var line = cm.getLine(cursor.line);
+                var textBeforeCursor = line.substring(0, cursor.ch);
+                
+                var lastAtIndex = textBeforeCursor.lastIndexOf('@');
+                if (lastAtIndex >= 0) {
+                    var textAfterAt = textBeforeCursor.substring(lastAtIndex + 1);
+                    // Check if we're still in a valid mention (no whitespace/punctuation)
+                    if (!/\s/.test(textAfterAt) && !/[^\w\s\-_]/.test(textAfterAt)) {
+                        currentQuery = textAfterAt;
+                        searchPersons(currentQuery);
+                        return;
+                    }
+                }
+                
+                hideDropdown();
+            });
+            
+            // Handle clicks on dropdown options
+            document.addEventListener('click', function(e) {
+                if (dropdown && dropdown.contains(e.target)) {
+                    var option = e.target.closest('.mention-option');
+                    if (option) {
+                        var button = option.querySelector('button');
+                        if (button) {
+                            insertMention(button.getAttribute('data-name'));
+                        }
+                    }
+                } else if (dropdown && !cm.getWrapperElement().contains(e.target)) {
+                    // Click outside editor - hide dropdown
+                    hideDropdown();
+                }
+            });
+            
+            // Handle keyboard events
+            cm.on('keydown', handleKeydown);
+            
+            // Cleanup on editor destruction
+            var originalDestroy = easyMDEInstance.cleanup || function() {};
+            easyMDEInstance.cleanup = function() {
+                if (dropdown && dropdown.parentNode) {
+                    dropdown.parentNode.removeChild(dropdown);
+                }
+                originalDestroy.call(this);
+            };
         }
     </script>
 

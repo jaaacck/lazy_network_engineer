@@ -11,8 +11,6 @@
 <div class="page-title">
     <span>{{ metadata.title }}</span>
     <div class="mode-toggle">
-        <a href="{% url 'note_detail' note_id=note_id %}" {% if not edit_mode %}class="active"{% endif %}>view</a>
-        <a href="{% url 'note_detail' note_id=note_id %}?edit=true" {% if edit_mode %}class="active"{% endif %}>edit</a>
         <form method="post" action="{% url 'delete_note' note_id=note_id %}">
             {% csrf_token %}
             <button type="submit" onclick="return confirm('Delete this note?')">delete</button>
@@ -90,7 +88,6 @@
     </div>
 </div>
 
-{% if not edit_mode %}
     {% if content %}
     <div class="section">
         <div class="content">
@@ -196,8 +193,8 @@
                         {% csrf_token %}
                         <input type="hidden" name="quick_update" value="create_task_from_note">
                         <input type="text" name="title" placeholder="Task title..." required>
-                        <select name="epic_id" required>
-                            <option value="">Select Epic...</option>
+                        <select name="epic_id">
+                            <option value="">No Epic (Direct Task)</option>
                             {% for epic in project_epics %}
                             <option value="{{ epic.id }}">{% if epic.seq_id %}{{ epic.seq_id }} {% endif %}{{ epic.title }}</option>
                             {% endfor %}
@@ -211,9 +208,13 @@
                             <option value="5">P5</option>
                         </select>
                         <select name="status">
-                            <option value="todo">todo</option>
-                            <option value="in_progress">in progress</option>
-                            <option value="done">done</option>
+                            <option value="todo">Todo</option>
+                            <option value="in_progress">In Progress</option>
+                            <option value="done">Done</option>
+                            <option value="on_hold">On Hold</option>
+                            <option value="blocked">Blocked</option>
+                            <option value="cancelled">Cancelled</option>
+                            <option value="next">Next</option>
                         </select>
                         <button type="submit">Create Task</button>
                     </form>
@@ -224,7 +225,11 @@
                     <div class="created-item">
                         <span class="item-meta">{{ task.epic_title }}:</span>
                         {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}
+                        {% if task.epic_id %}
                         <a href="{% url 'task_detail' project=note_project.id epic=task.epic_id task=task.id %}">{{ task.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=note_project.id task=task.id %}">{{ task.title }}</a>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
@@ -288,12 +293,16 @@
                     {% for task in backlinks.tasks %}
                     <div class="backlink-item">
                         {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}
+                        {% if task.epic_id %}
                         <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">{{ task.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=task.project_id task=task.id %}">{{ task.title }}</a>
+                        {% endif %}
                         <form method="post" class="backlink-remove">
                             {% csrf_token %}
                             <input type="hidden" name="quick_update" value="unlink_task">
                             <input type="hidden" name="project_id" value="{{ task.project_id }}">
-                            <input type="hidden" name="epic_id" value="{{ task.epic_id }}">
+                            {% if task.epic_id %}<input type="hidden" name="epic_id" value="{{ task.epic_id }}">{% endif %}
                             <input type="hidden" name="task_id" value="{{ task.id }}">
                             <button type="submit" class="delete-inline">×</button>
                         </form>
@@ -310,12 +319,16 @@
                     {% for subtask in backlinks.subtasks %}
                     <div class="backlink-item">
                         {% if subtask.seq_id %}<span class="seq-id">{{ subtask.seq_id }}</span>{% endif %}
+                        {% if subtask.epic_id %}
                         <a href="{% url 'subtask_detail' project=subtask.project_id epic=subtask.epic_id task=subtask.task_id subtask=subtask.id %}">{{ subtask.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=subtask.project_id task=subtask.task_id subtask=subtask.id %}">{{ subtask.title }}</a>
+                        {% endif %}
                         <form method="post" class="backlink-remove">
                             {% csrf_token %}
                             <input type="hidden" name="quick_update" value="unlink_subtask">
                             <input type="hidden" name="project_id" value="{{ subtask.project_id }}">
-                            <input type="hidden" name="epic_id" value="{{ subtask.epic_id }}">
+                            {% if subtask.epic_id %}<input type="hidden" name="epic_id" value="{{ subtask.epic_id }}">{% endif %}
                             <input type="hidden" name="task_id" value="{{ subtask.task_id }}">
                             <input type="hidden" name="subtask_id" value="{{ subtask.id }}">
                             <button type="submit" class="delete-inline">×</button>
@@ -424,54 +437,10 @@
     <div class="item-meta note-meta-spaced">
         <strong>Created:</strong> {{ metadata.created }} {% if metadata.updated %}| <strong>Updated:</strong> {{ metadata.updated }}{% endif %}
     </div>
-{% else %}
-    <div class="section">
-        <form method="post">
-            {% csrf_token %}
-            
-            <div class="form-group">
-                <label for="title">Title</label>
-                <input type="text" name="title" id="title" value="{{ metadata.title }}" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="people">People (@mentions, comma-separated)</label>
-                <input type="text" name="people" id="people" value="{% if metadata.people %}{{ metadata.people|join:', ' }}{% endif %}" placeholder="@john, @jane">
-            </div>
-            
-            <div class="form-group">
-                <label for="labels">Labels (comma-separated)</label>
-                <input type="text" name="labels" id="labels" value="{% if metadata.labels %}{{ metadata.labels|join:', ' }}{% endif %}" placeholder="meeting, brainstorm">
-            </div>
-            
-            <div class="form-group">
-                <label for="content">Content (markdown)</label>
-                <textarea name="content" id="content">{{ content }}</textarea>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit">Save</button>
-                <a href="{% url 'note_detail' note_id=note_id %}" class="button button-secondary">Cancel</a>
-            </div>
-        </form>
-    </div>
-{% endif %}
 
 {% endblock %}
 
 {% block scripts %}
-{% if edit_mode %}
-<script>
-    var contentTextarea = document.getElementById('content');
-    if (contentTextarea) {
-        var editor = new EasyMDE({
-            element: contentTextarea,
-            spellChecker: false,
-            toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide']
-        });
-    }
-</script>
-{% endif %}
 
 <script>
     // Searchable tag dropdowns (labels and people)

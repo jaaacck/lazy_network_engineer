@@ -1,14 +1,13 @@
 {% extends 'pm/base.html' %}
 
 {% block content %}
-<div class="page-title">Projects</div>
-
-<div class="section">
-    <div class="section-title">
+<div class="page-title">
+    <span>Projects</span>
+    <div class="mode-toggle">
         {% if show_archived %}
-        <a href="{% url 'project_list' %}" class="button">Show Active</a>
+        <a href="{% url 'project_list' %}">Show Active</a>
         {% else %}
-        <a href="{% url 'project_list' %}?archived=true" class="button">Show Archived</a>
+        <a href="{% url 'project_list' %}?archived=true">Show Archived</a>
         {% endif %}
     </div>
 </div>
@@ -41,7 +40,7 @@
     <div class="item">
         <div class="item-title">
             <a href="{% url 'project_detail' project=project.id %}">{{ project.title }}</a>
-            <span class="badge badge-status status-{{ project.status }}">{{ project.status }}</span>
+            <span class="badge badge-status status-{{ project.status }}">{{ project.status_display|default:project.status }}</span>
         </div>
         
         <details class="project-overview">
@@ -103,7 +102,7 @@ if (projectForm) {
                 div.className = 'item';
                 div.innerHTML = '<div class="item-title">' +
                     '<a href="' + data.url + '">' + escapeHtml(data.title) + '</a>' +
-                    '<span class="badge badge-status status-' + data.status + '">' + data.status + '</span>' +
+                    '<span class="badge badge-status status-' + data.status + '">' + (data.status_display || data.status) + '</span>' +
                     '</div>' +
                     '<details class="project-overview">' +
                     '<summary>Overview</summary>' +

@@ -3,8 +3,8 @@
 {% block content %}
 <div class="breadcrumb">
     <a href="{% url 'project_list' %}">projects</a> &gt;
-    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a> &gt;
-    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a> &gt;
+    <a href="{% url 'project_detail' project=project %}">{{ project_title }}</a>{% if epic %} &gt;
+    <a href="{% url 'epic_detail' project=project epic=epic %}">{{ epic_title }}</a>{% endif %} &gt;
     new task
 </div>
 
@@ -58,7 +58,11 @@
 
         <div class="form-actions">
             <button type="submit">Create Task</button>
+            {% if epic %}
             <a href="{% url 'epic_detail' project=project epic=epic %}" class="button button-secondary">Cancel</a>
+            {% else %}
+            <a href="{% url 'project_detail' project=project %}" class="button button-secondary">Cancel</a>
+            {% endif %}
         </div>
     </form>
 </div>

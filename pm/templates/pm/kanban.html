@@ -33,7 +33,55 @@
                 {% if item.status == 'todo' %}
                 <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
                     <div class="kanban-card-title">
-                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="next">
+        <div class="kanban-column-header">
+            <h3>Next</h3>
+            <span class="badge" id="next-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="next-column">
+            {% for item in items %}
+                {% if item.status == 'next' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
                     </div>
                     {% if item.priority %}
                     <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
@@ -57,7 +105,91 @@
                 {% if item.status == 'in_progress' %}
                 <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
                     <div class="kanban-card-title">
-                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="on_hold">
+        <div class="kanban-column-header">
+            <h3>On Hold</h3>
+            <span class="badge" id="on-hold-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="on-hold-column">
+            {% for item in items %}
+                {% if item.status == 'on_hold' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="blocked">
+        <div class="kanban-column-header">
+            <h3>Blocked</h3>
+            <span class="badge" id="blocked-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="blocked-column">
+            {% for item in items %}
+                {% if item.status == 'blocked' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
                     </div>
                     {% if item.priority %}
                     <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
@@ -81,7 +213,55 @@
                 {% if item.status == 'done' %}
                 <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
                     <div class="kanban-card-title">
-                        <a href="{% if item.type == 'task' %}{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}{% else %}{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}{% endif %}">{{ item.title }}</a>
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                    {% if item.priority %}
+                    <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
+                    {% endif %}
+                    {% if item.epic_title and scope == 'project' %}
+                    <div class="kanban-card-meta">{{ item.epic_title }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="kanban-column" data-status="cancelled">
+        <div class="kanban-column-header">
+            <h3>Cancelled</h3>
+            <span class="badge" id="cancelled-count">0</span>
+        </div>
+        <div class="kanban-column-content" id="cancelled-column">
+            {% for item in items %}
+                {% if item.status == 'cancelled' %}
+                <div class="kanban-card" draggable="true" data-type="{{ item.type }}" data-id="{{ item.id }}" data-project="{{ item.project_id }}" data-epic="{{ item.epic_id }}" {% if item.type == 'subtask' %}data-task="{{ item.task_id }}"{% endif %}>
+                    <div class="kanban-card-title">
+                        {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% else %}
+                        {% if item.epic_id %}
+                        <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% else %}
+                        <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                        {% endif %}
+                        {% endif %}
                     </div>
                     {% if item.priority %}
                     <span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>
@@ -102,8 +282,12 @@
 <script>
     function updateCounts() {
         document.getElementById('todo-count').textContent = document.getElementById('todo-column').children.length;
+        document.getElementById('next-count').textContent = document.getElementById('next-column').children.length;
         document.getElementById('in-progress-count').textContent = document.getElementById('in-progress-column').children.length;
+        document.getElementById('on-hold-count').textContent = document.getElementById('on-hold-column').children.length;
+        document.getElementById('blocked-count').textContent = document.getElementById('blocked-column').children.length;
         document.getElementById('done-count').textContent = document.getElementById('done-column').children.length;
+        document.getElementById('cancelled-count').textContent = document.getElementById('cancelled-column').children.length;
     }
     
     updateCounts();

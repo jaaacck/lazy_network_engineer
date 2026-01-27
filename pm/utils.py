@@ -2,6 +2,8 @@ import os
 import re
 import yaml
 import logging
+import time
+import json
 from datetime import datetime
 from django.conf import settings
 from django.http import Http404
@@ -58,6 +60,9 @@ def safe_join_path(*parts):
 def load_entity(file_path, default_title, default_status, metadata_only=False):
     """
     Generic loader for markdown files with YAML frontmatter.
+    
+    NOTE: This function is kept for migration purposes only.
+    After migration to SQLite, all entity loading should use Entity.objects.get().
     """
     if not os.path.exists(file_path):
         return None, None
@@ -69,7 +74,6 @@ def load_entity(file_path, default_title, default_status, metadata_only=False):
         cached_mtime, cached_data = _entity_cache[cache_key]
         if cached_mtime == mtime:
             return cached_data
-
     try:
         # Use a small read buffer if we only need metadata
         with open(file_path, 'r', encoding='utf-8-sig') as f:
@@ -125,37 +129,6 @@ def load_entity(file_path, default_title, default_status, metadata_only=False):
     # Store in cache
     _entity_cache[cache_key] = (mtime, result)
     return result
-
-
-def save_entity(file_path, metadata, content):
-    """
-    Generic saver for markdown files with YAML frontmatter.
-
-    Args:
-        file_path: Absolute path to save the file
-        metadata: Dictionary of metadata to save in frontmatter
-        content: Markdown content
-    """
-    # Ensure parent directory exists
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write('---\n')
-            yaml.dump(metadata, f, sort_keys=False, default_flow_style=False)
-            f.write('---\n\n')
-            f.write(content)
-        
-        # Invalidate cache
-        cache_key_full = (file_path, False)
-        cache_key_meta = (file_path, True)
-        if cache_key_full in _entity_cache: del _entity_cache[cache_key_full]
-        if cache_key_meta in _entity_cache: del _entity_cache[cache_key_meta]
-        
-        logger.info(f"Successfully saved entity to {file_path}")
-    except IOError as e:
-        logger.error(f"Error writing file {file_path}: {e}")
-        raise
 
 
 def calculate_markdown_progress(content):

@@ -2,6 +2,20 @@
 
 All notable changes to Lazy Network Engineer will be documented in this file.
 
+## [1.2.8] - 2026-01-24
+
+### Fixed
+- Fixed person creation when adding people from tasks, subtasks, epics, notes, or quick-add
+- Added `ensure_person_exists()` helper function that automatically creates person files when needed
+- People added from anywhere in the application now properly show up in the People tab and can be referenced elsewhere
+
+## [1.2.7] - 2026-01-24
+
+### Fixed
+- Added automatic initialization of custom database tables (search_index, relationships) on app startup
+- Updated README.md with clearer first-run setup instructions
+- Custom index tables now created automatically via AppConfig.ready() method
+
 ## [1.2.6] - 2026-01-24
 
 ### Fixed

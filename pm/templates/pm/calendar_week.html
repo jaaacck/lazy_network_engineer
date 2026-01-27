@@ -15,7 +15,6 @@
     <a href="{% url 'calendar_week' year=prev_year week=prev_week %}" class="button">&lt; Previous Week</a>
     <a href="{% url 'calendar' %}" class="button">Today</a>
     <a href="{% url 'calendar_week' year=next_year week=next_week %}" class="button">Next Week &gt;</a>
-    <span style="margin-left: 10px;"></span>
     <a href="{% url 'calendar_day' date_str=today %}" class="button">Day View</a>
 </div>
 
@@ -32,7 +31,11 @@
             {% for task in day_info.tasks %}
             <div class="week-task status-{{ task.status }}" style="border-left-color: {{ task.project_color }}; background: {{ task.project_color_bg }};">
                 <div class="task-time" style="color: {{ task.project_color }};">{{ task.schedule_start|slice:"11:16" }}</div>
+                {% if task.epic_id %}
                 <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">
+                {% else %}
+                <a href="{% url 'task_detail_no_epic' project=task.project_id task=task.id %}">
+                {% endif %}
                     {{ task.title }}
                 </a>
             </div>

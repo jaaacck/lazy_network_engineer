@@ -10,7 +10,7 @@ body {
     font-size: 10pt;
     color: #000;
     background: #f6f6ef;
-    line-height: 1.5;
+    line-height: 1.4;
 }
 
 /* Header */
@@ -60,6 +60,7 @@ body {
 
 .nav-search {
     margin-left: auto;
+    order: 999;
 }
 
 .nav-search input {
@@ -87,25 +88,26 @@ body {
 /* Toolbox dropdown */
 .toolbox-dropdown {
     position: relative;
-    margin-left: 10px;
+    margin-left: 0;
 }
 
 .toolbox-toggle {
     font-family: Verdana, Geneva, sans-serif;
     font-size: 9pt;
     font-weight: bold;
-    padding: 4px 12px;
-    border: 1px solid rgba(0, 0, 0, 0.2);
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.9);
+    padding: 0;
+    border: none;
+    background: none;
     color: #000;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    text-decoration: none;
+    transition: none;
 }
 
 .toolbox-toggle:hover {
-    background: #fff;
-    border-color: rgba(0, 0, 0, 0.4);
+    text-decoration: underline;
+    background: none;
+    border: none;
 }
 
 .toolbox-menu {
@@ -113,14 +115,14 @@ body {
     position: absolute;
     top: 100%;
     right: 0;
-    margin-top: 4px;
+    margin-top: 2px;
     background: #fff;
-    border: 1px solid rgba(0, 0, 0, 0.2);
-    border-radius: 3px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 2px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
     min-width: 180px;
     z-index: 1000;
-    padding: 4px 0;
+    padding: 2px 0;
 }
 
 .toolbox-menu.show {
@@ -129,7 +131,7 @@ body {
 
 .toolbox-item {
     display: block;
-    padding: 8px 12px;
+    padding: 4px 8px;
     color: #000;
     text-decoration: none;
     font-size: 9pt;
@@ -137,8 +139,8 @@ body {
 }
 
 .toolbox-item:hover {
-    background: #f5f5f5;
-    text-decoration: none;
+    background: #f6f6ef;
+    text-decoration: underline;
 }
 
 /* Help link in nav */
@@ -146,20 +148,21 @@ body {
     font-family: Verdana, Geneva, sans-serif;
     font-size: 9pt;
     font-weight: bold;
-    padding: 4px 12px;
-    border: 1px solid rgba(0, 0, 0, 0.2);
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.9);
+    padding: 0;
+    border: none;
+    background: none;
     color: #000;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    text-decoration: none;
+    transition: none;
     margin-left: auto;
-    margin-right: 10px;
+    margin-right: 0;
 }
 
 .nav-quick-add:hover {
-    background: #fff;
-    border-color: rgba(0, 0, 0, 0.4);
+    text-decoration: underline;
+    background: none;
+    border: none;
 }
 
 .nav-help {
@@ -187,6 +190,7 @@ body {
     background: rgba(0, 0, 0, 0.5);
     z-index: 1000;
     overflow-y: auto;
+    pointer-events: none;
 }
 
 .help-modal.show {
@@ -194,24 +198,27 @@ body {
     align-items: center;
     justify-content: center;
     padding: 20px;
+    pointer-events: auto;
 }
 
 .help-modal-content {
     background: #fff;
-    border-radius: 3px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    border-radius: 2px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
     max-width: 600px;
     width: 100%;
     max-height: 90vh;
-    overflow-y: auto;
+    overflow: visible;
     position: relative;
+    z-index: 1001;
+    pointer-events: auto;
 }
 
 .help-modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 12px 16px;
     border-bottom: 1px solid #e0e0e0;
     background: #f9f9f9;
 }
@@ -225,13 +232,13 @@ body {
 /* Quick Add Modal Tabs */
 .quick-add-tabs {
     display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
+    gap: 6px;
+    margin-bottom: 12px;
     border-bottom: 1px solid #e0e0e0;
 }
 
 .quick-add-tab {
-    padding: 8px 16px;
+    padding: 6px 12px;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
@@ -252,7 +259,7 @@ body {
 }
 
 .quick-add-form {
-    margin-top: 20px;
+    margin-top: 12px;
 }
 
 .quick-add-form[style*="display: none"] {
@@ -264,7 +271,7 @@ body {
 }
 
 .quick-add-form .form-group {
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 }
 
 .quick-add-form label {
@@ -280,9 +287,9 @@ body {
 .quick-add-form textarea,
 .quick-add-form select {
     width: 100%;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     font-family: Verdana, Geneva, sans-serif;
     font-size: 10pt;
 }
@@ -293,16 +300,16 @@ body {
 }
 
 .quick-add-form .form-actions {
-    margin-top: 20px;
+    margin-top: 12px;
     text-align: right;
 }
 
 .quick-add-form .form-actions button {
-    padding: 6px 16px;
+    padding: 5px 12px;
     background: #ff6600;
     color: #000;
     border: 1px solid #e55a00;
-    border-radius: 3px;
+    border-radius: 2px;
     font-weight: bold;
     cursor: pointer;
     font-size: 10pt;
@@ -312,23 +319,6 @@ body {
     background: #ff7700;
 }
 
-.move-task-button {
-    margin-left: 8px;
-    padding: 6px 14px;
-    background: #fff;
-    color: #000;
-    border: none;
-    border-left: 1px solid #ddd;
-    border-radius: 0;
-    font-family: Verdana, Geneva, sans-serif;
-    font-size: 9pt;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.move-task-button:hover {
-    background: #f5f5f5;
-}
 
 .help-modal-close {
     background: none;
@@ -351,7 +341,10 @@ body {
 }
 
 .help-content {
-    padding: 20px;
+    padding: 16px;
+    overflow-y: auto;
+    max-height: calc(90vh - 120px);
+    overflow-x: visible;
 }
 
 .help-content h3 {
@@ -361,40 +354,40 @@ body {
 }
 
 .help-content h4 {
-    margin: 16px 0 8px 0;
+    margin: 12px 0 6px 0;
     font-size: 10pt;
-    color: #333;
+    color: #828282;
     border-bottom: 1px solid #e0e0e0;
-    padding-bottom: 4px;
+    padding-bottom: 3px;
 }
 
 .help-content p {
-    margin: 0 0 12px 0;
+    margin: 0 0 10px 0;
     font-size: 9pt;
-    color: #555;
+    color: #828282;
 }
 
 .help-list {
-    margin: 8px 0;
-    padding-left: 20px;
+    margin: 6px 0;
+    padding-left: 18px;
     font-size: 9pt;
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
 .help-list li {
-    margin-bottom: 6px;
-    color: #333;
+    margin-bottom: 4px;
+    color: #000;
 }
 
 .help-list kbd {
     display: inline-block;
-    padding: 2px 6px;
+    padding: 2px 5px;
     font-family: monospace;
     font-size: 8pt;
     background: #f0f0f0;
     border: 1px solid #ccc;
-    border-radius: 3px;
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+    border-radius: 2px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
     margin: 0 2px;
 }
 
@@ -419,12 +412,12 @@ body {
 }
 
 .subnet-result-item {
-    padding: 6px 8px;
+    padding: 5px 6px;
     background: #f9f9f9;
     border-left: 2px solid #ff6600;
     border-radius: 2px;
     font-size: 8pt;
-    line-height: 1.4;
+    line-height: 1.3;
 }
 
 .subnet-result-item strong {
@@ -465,22 +458,22 @@ body {
 /* Tool modal input styles */
 .tool-input {
     width: 100%;
-    padding: 8px;
-    margin-top: 8px;
+    padding: 6px;
+    margin-top: 6px;
     font-family: monospace;
     font-size: 9pt;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 .tool-button {
-    margin-top: 10px;
-    padding: 6px 12px;
+    margin-top: 8px;
+    padding: 5px 10px;
     cursor: pointer;
     background: #ff6600;
     color: #000;
     border: 1px solid #e55a00;
-    border-radius: 3px;
+    border-radius: 2px;
     font-weight: bold;
     font-size: 9pt;
     font-family: Verdana, Geneva, sans-serif;
@@ -500,12 +493,12 @@ body {
 }
 
 .tool-error {
-    margin-top: 20px;
+    margin-top: 12px;
     display: none;
     color: #d00;
-    padding: 10px;
+    padding: 8px;
     background: #ffe0e0;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
 }
 
@@ -514,10 +507,10 @@ body {
 }
 
 .tool-loading {
-    margin-top: 20px;
+    margin-top: 12px;
     display: none;
     color: #555;
-    padding: 10px;
+    padding: 8px;
     text-align: center;
     font-size: 9pt;
     font-style: italic;
@@ -529,11 +522,11 @@ body {
 
 .tool-output {
     background: #f9f9f9;
-    padding: 12px;
-    border-radius: 3px;
+    padding: 10px;
+    border-radius: 2px;
     font-family: monospace;
     font-size: 8pt;
-    line-height: 1.5;
+    line-height: 1.4;
     overflow-x: auto;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -560,21 +553,21 @@ body {
 }
 
 .tool-select {
-    padding: 4px 8px;
+    padding: 3px 6px;
     font-family: monospace;
     font-size: 9pt;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     background: #fff;
 }
 
 .tool-input-small {
-    padding: 4px 8px;
+    padding: 3px 6px;
     font-family: monospace;
     width: 150px;
     font-size: 9pt;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 /* Form display utilities */
@@ -598,17 +591,17 @@ body {
 
 .color-input {
     width: 100px;
-    height: 40px;
+    height: 36px;
     padding: 0;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: pointer;
 }
 
 /* Main content */
 .main {
     max-width: 1200px;
-    margin: 12px auto;
+    margin: 8px auto;
     padding: 0 12px;
     background: #f6f6ef;
 }
@@ -617,8 +610,8 @@ body {
 .breadcrumb {
     font-size: 8pt;
     color: #828282;
-    margin-bottom: 12px;
-    padding: 4px 0;
+    margin-bottom: 8px;
+    padding: 2px 0;
 }
 
 .breadcrumb a {
@@ -635,11 +628,11 @@ body {
 .page-title {
     font-size: 16pt;
     font-weight: bold;
-    margin-bottom: 16px;
+    margin-bottom: 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
 }
 
@@ -656,8 +649,8 @@ body {
 
 .badge {
     font-size: 9pt;
-    padding: 5px 12px;
-    border-radius: 3px;
+    padding: 4px 10px;
+    border-radius: 2px;
     border: none;
     cursor: pointer;
     font-weight: normal;
@@ -689,6 +682,26 @@ select.badge {
 
 .badge-status.status-done {
     background: #ccffcc;
+    color: #000;
+}
+
+.badge-status.status-on_hold {
+    background: #e6ccff;
+    color: #000;
+}
+
+.badge-status.status-blocked {
+    background: #ffcccc;
+    color: #000;
+}
+
+.badge-status.status-cancelled {
+    background: #cccccc;
+    color: #000;
+}
+
+.badge-status.status-next {
+    background: #cce5ff;
     color: #000;
 }
 
@@ -735,11 +748,11 @@ select.badge {
 
 .label-chip {
     font-size: 8pt;
-    padding: 3px 8px;
-    border-radius: 12px;
+    padding: 2px 6px;
+    border-radius: 10px;
     border: 1px solid transparent;
     background: #f0f0f0;
-    color: #333;
+    color: #000;
 }
 
 .people-chip {
@@ -758,20 +771,24 @@ mark {
 .status-active, .status-todo { background: #ffffcc; color: #000; }
 .status-in_progress { background: #cce5ff; color: #000; }
 .status-done, .status-completed { background: #ccffcc; color: #000; }
+.status-on_hold { background: #e6ccff; color: #000; }
+.status-blocked { background: #ffcccc; color: #000; }
+.status-cancelled { background: #cccccc; color: #000; }
+.status-next { background: #cce5ff; color: #000; }
 .status-canceled { background: #ffcccc; color: #000; }
 
 /* Legacy status classes for backward compatibility */
 .status {
     font-size: 8pt;
-    padding: 3px 8px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 2px;
     display: inline-block;
 }
 
 .priority {
     font-size: 8pt;
-    padding: 3px 8px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 2px;
     margin-left: 8px;
     font-weight: normal;
 }
@@ -786,21 +803,21 @@ mark {
 .section {
     background: #fff;
     border: 1px solid #ddd;
-    margin-bottom: 12px;
-    padding: 12px;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    margin-bottom: 8px;
+    padding: 10px;
+    border-radius: 2px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
 }
 
 .section-title {
     font-size: 11pt;
     font-weight: bold;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     color: #000;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-bottom: 6px;
+    padding-bottom: 4px;
     border-bottom: 1px solid #eee;
 }
 
@@ -811,11 +828,11 @@ mark {
 
 /* Lists */
 .item-list {
-    margin: 8px 0;
+    margin: 6px 0;
 }
 
 .item {
-    padding: 8px 0;
+    padding: 6px 0;
     border-bottom: 1px solid #f0f0f0;
     transition: background 0.2s;
 }
@@ -851,11 +868,11 @@ details.section[open] > summary.section-title::after {
 }
 
 .checklist-section .item-list {
-    margin-top: 8px;
+    margin-top: 6px;
 }
 
 .checklist-section .checklist-add {
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .draggable-row.dragging {
@@ -885,8 +902,8 @@ details.section[open] > summary.section-title::after {
 .item-meta {
     font-size: 8pt;
     color: #828282;
-    margin-top: 4px;
-    line-height: 1.4;
+    margin-top: 2px;
+    line-height: 1.3;
 }
 
 .item-meta a {
@@ -898,32 +915,32 @@ details.section[open] > summary.section-title::after {
 .bulk-action-bar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 6px 10px;
     background: #fff8f0;
     border: 1px solid #ff6600;
-    border-radius: 4px;
-    margin: 10px 0;
+    border-radius: 2px;
+    margin: 8px 0;
 }
 
 .bulk-action-bar .bulk-count {
     font-weight: bold;
     color: #ff6600;
-    margin-right: 10px;
+    margin-right: 8px;
 }
 
 .bulk-action-bar select {
-    padding: 4px 8px;
+    padding: 3px 6px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
     background: #fff;
 }
 
 .bulk-action-bar button {
-    padding: 4px 10px;
+    padding: 3px 8px;
     border: none;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
     cursor: pointer;
 }
@@ -947,7 +964,7 @@ details.section[open] > summary.section-title::after {
 }
 
 .col-checkbox {
-    width: 30px;
+    width: 28px;
     text-align: center;
 }
 
@@ -972,9 +989,9 @@ details.section[open] > summary.section-title::after {
 }
 
 .item-list-header {
-    padding: 6px 0;
+    padding: 4px 0;
     border-bottom: 1px solid #ddd;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .bulk-select-all {
@@ -1010,13 +1027,13 @@ details.section[open] > summary.section-title::after {
     background: #ff6600;
     color: #fff;
     border: none;
-    padding: 6px 12px;
+    padding: 5px 10px;
     font-size: 9pt;
     font-family: Verdana, Geneva, sans-serif;
     cursor: pointer;
     text-decoration: none;
     display: inline-block;
-    border-radius: 3px;
+    border-radius: 2px;
     transition: background 0.2s;
 }
 
@@ -1050,9 +1067,9 @@ textarea,
 select {
     font-family: Verdana, Geneva, sans-serif;
     font-size: 9pt;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     width: 100%;
     max-width: 600px;
     transition: border-color 0.2s;
@@ -1075,6 +1092,12 @@ select {
         calc(100% - 26px) 50%;
     background-size: 5px 5px, 5px 5px, 1px 14px;
     background-repeat: no-repeat;
+    position: relative;
+}
+
+.help-modal-content select {
+    z-index: 1002;
+    position: relative;
 }
 
 input:focus, textarea:focus, select:focus {
@@ -1084,12 +1107,12 @@ input:focus, textarea:focus, select:focus {
 }
 
 textarea {
-    min-height: 200px;
+    min-height: 150px;
     resize: vertical;
 }
 
 .form-group {
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .form-group label {
@@ -1097,13 +1120,13 @@ textarea {
     font-weight: bold;
     margin-bottom: 4px;
     font-size: 9pt;
-    color: #333;
+    color: #000;
 }
 
 .form-actions {
-    margin-top: 16px;
+    margin-top: 12px;
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
 }
 
@@ -1117,20 +1140,20 @@ table {
     border-collapse: collapse;
     width: 100%;
     font-size: 9pt;
-    margin-top: 8px;
+    margin-top: 6px;
 }
 
 table th {
     text-align: left;
-    padding: 8px 10px;
-    border-bottom: 2px solid #ddd;
+    padding: 6px 8px;
+    border-bottom: 1px solid #ddd;
     font-weight: bold;
     background: #f9f9f9;
-    color: #333;
+    color: #000;
 }
 
 table td {
-    padding: 8px 10px;
+    padding: 6px 8px;
     border-bottom: 1px solid #f0f0f0;
 }
 
@@ -1168,10 +1191,10 @@ table tr:last-child td {
 /* Progress bar */
 .progress {
     background: #e8e8e8;
-    height: 10px;
-    border-radius: 3px;
+    height: 8px;
+    border-radius: 2px;
     overflow: hidden;
-    margin: 6px 0;
+    margin: 4px 0;
 }
 
 .progress-bar {
@@ -1210,9 +1233,9 @@ table tr:last-child td {
 
 /* Updates/Timeline */
 .update {
-    border-left: 3px solid #ff6600;
-    padding: 10px 12px;
-    margin: 12px 0;
+    border-left: 2px solid #ff6600;
+    padding: 8px 10px;
+    margin: 8px 0;
     background: #fffaf7;
     border-radius: 2px;
 }
@@ -1230,12 +1253,12 @@ table tr:last-child td {
 .update-meta {
     font-size: 8pt;
     color: #828282;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     font-style: italic;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 6px;
 }
 
 .update-timestamp {
@@ -1249,10 +1272,10 @@ table tr:last-child td {
 
 .update-type-badge {
     display: inline-block;
-    padding: 2px 6px;
+    padding: 2px 5px;
     background: #e0e0e0;
     color: #000;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 7pt;
     font-weight: bold;
     font-style: normal;
@@ -1271,7 +1294,7 @@ table tr:last-child td {
 
 .update-content {
     font-size: 9pt;
-    line-height: 1.5;
+    line-height: 1.4;
 }
 
 .activity-filters {
@@ -1303,12 +1326,12 @@ table tr:last-child td {
 
 /* Markdown content */
 .content {
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
 .content h1, .content h2, .content h3 {
-    margin-top: 16px;
-    margin-bottom: 8px;
+    margin-top: 12px;
+    margin-bottom: 6px;
     font-size: 12pt;
     font-weight: bold;
 }
@@ -1318,37 +1341,37 @@ table tr:last-child td {
 .content h3 { font-size: 11pt; }
 
 .content p {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .content ul, .content ol {
-    margin-left: 24px;
-    margin-bottom: 10px;
+    margin-left: 20px;
+    margin-bottom: 8px;
 }
 
 .content li {
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .content code {
     background: #f5f5f5;
-    padding: 2px 5px;
+    padding: 1px 4px;
     font-family: 'Courier New', Courier, monospace;
     font-size: 9pt;
-    border-radius: 2px;
+    border-radius: 1px;
     color: #c7254e;
 }
 
 .content pre {
     background: #2d2d2d;
     color: #f8f8f2;
-    padding: 12px;
+    padding: 10px;
     overflow-x: auto;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     font-size: 9pt;
-    border-radius: 3px;
+    border-radius: 2px;
     border: 1px solid #1a1a1a;
-    line-height: 1.5;
+    line-height: 1.4;
 }
 
 .content pre code {
@@ -1365,17 +1388,17 @@ table tr:last-child td {
 }
 
 .content blockquote {
-    border-left: 3px solid #ff6600;
-    padding-left: 12px;
-    margin: 12px 0;
+    border-left: 2px solid #ff6600;
+    padding-left: 10px;
+    margin: 10px 0;
     color: #555;
     font-style: italic;
 }
 
 .content table {
     border: 1px solid #ddd;
-    margin-bottom: 10px;
-    border-radius: 3px;
+    margin-bottom: 8px;
+    border-radius: 2px;
     overflow: hidden;
 }
 
@@ -1383,9 +1406,9 @@ table tr:last-child td {
     max-width: 100%;
     height: auto;
     display: block;
-    margin: 12px 0;
-    border-radius: 3px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    margin: 10px 0;
+    border-radius: 2px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* EasyMDE editor styling */
@@ -1436,90 +1459,158 @@ table tr:last-child td {
     border-radius: 2px;
 }
 
-/* Edit mode toggle */
+/* Description editing */
+.description-container {
+    position: relative;
+}
+
+.description-edit-btn {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    color: #828282;
+    cursor: pointer;
+    font-family: Verdana, Geneva, sans-serif;
+    font-size: 9pt;
+    white-space: nowrap;
+}
+
+.description-edit-btn:hover {
+    background: none;
+    color: #ff6600;
+    text-decoration: underline;
+}
+
+.description-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.description-actions button {
+    font-size: 9pt;
+    padding: 4px 12px;
+    background: #ff6600;
+    border: 1px solid #e55a00;
+    color: #000;
+    cursor: pointer;
+    font-family: Verdana, Geneva, sans-serif;
+}
+
+.description-actions button:hover {
+    background: #e55a00;
+}
+
+.description-actions button#description-cancel-btn {
+    background: transparent;
+    border-color: #ccc;
+    color: #828282;
+}
+
+.description-actions button#description-cancel-btn:hover {
+    background: #f0f0f0;
+    border-color: #999;
+    color: #000;
+}
+
+#description-editor-container {
+    margin-top: 10px;
+}
+
+/* Edit mode toggle - Minimal HN style */
 .mode-toggle {
     margin-bottom: 0;
     font-size: 9pt;
     display: inline-flex;
     gap: 0;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    overflow: hidden;
+    align-items: center;
+    font-family: Verdana, Geneva, sans-serif;
+}
+
+.mode-toggle > * {
+    display: inline-flex;
     align-items: center;
 }
 
-.mode-toggle a {
-    padding: 6px 14px;
-    background: #fff;
-    color: #000;
-    text-decoration: none;
-    border-right: 1px solid #ddd;
-    transition: background 0.2s;
-    font-family: Verdana, Geneva, sans-serif;
-    font-size: 9pt;
+.mode-toggle > *:not(:last-child)::after {
+    content: " | ";
+    color: #828282;
+    margin: 0 4px;
+    font-weight: normal;
 }
 
-.mode-toggle a:last-child {
-    border-right: none;
+.mode-toggle a {
+    padding: 0;
+    background: none;
+    color: #828282;
+    text-decoration: none;
+    font-size: 9pt;
+    transition: color 0.2s;
 }
 
 .mode-toggle a:hover {
-    background: #f5f5f5;
+    color: #ff6600;
+    text-decoration: underline;
 }
 
 .mode-toggle a.active {
-    background: #ff6600;
-    color: #fff;
+    color: #ff6600;
+    font-weight: bold;
 }
 
 .mode-toggle a.active:hover {
-    background: #ff8533;
+    color: #ff6600;
+    text-decoration: underline;
 }
 
 .mode-toggle .button {
-    margin-left: 8px;
-    padding: 6px 14px;
-    background: #fff;
-    color: #000;
+    margin: 0;
+    padding: 0;
+    background: none;
+    color: #828282;
     border: none;
-    border-left: 1px solid #ddd;
-    border-radius: 0;
     font-family: Verdana, Geneva, sans-serif;
     font-size: 9pt;
     text-decoration: none;
-    display: inline-block;
-    transition: background 0.2s;
+    display: inline;
+    transition: color 0.2s;
+    cursor: pointer;
 }
 
 .mode-toggle .button:hover {
-    background: #f5f5f5;
+    background: none;
+    color: #ff6600;
+    text-decoration: underline;
 }
 
 .mode-toggle button {
-    margin-left: 8px;
-    padding: 6px 14px;
-    background: #fff;
-    color: #000;
+    margin: 0;
+    padding: 0;
+    background: none;
+    color: #828282;
     border: none;
-    border-left: 1px solid #ddd;
-    border-radius: 0;
     font-family: Verdana, Geneva, sans-serif;
     font-size: 9pt;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: color 0.2s;
 }
 
 .mode-toggle button:hover {
-    background: #f5f5f5;
+    background: none;
+    color: #ff6600;
+    text-decoration: underline;
 }
 
 .mode-toggle button.button-secondary {
-    background: #fff;
-    color: #000;
+    background: none;
+    color: #828282;
 }
 
 .mode-toggle button.button-secondary:hover {
-    background: #f5f5f5;
+    background: none;
+    color: #ff6600;
+    text-decoration: underline;
 }
 
 .mode-toggle form {
@@ -1532,8 +1623,8 @@ table tr:last-child td {
 .checklist-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 0;
+    gap: 8px;
+    padding: 4px 0;
     border-bottom: 1px solid #f0f0f0;
 }
 
@@ -1574,9 +1665,9 @@ table tr:last-child td {
 }
 
 .checklist-add {
-    margin-top: 12px;
+    margin-top: 8px;
     display: flex;
-    gap: 8px;
+    gap: 6px;
 }
 
 .checklist-add input {
@@ -1593,24 +1684,24 @@ table tr:last-child td {
 .quick-setting-form {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
 }
 
 .quick-setting-form label {
     font-size: 9pt;
     font-weight: bold;
-    min-width: 90px;
+    min-width: 80px;
     margin: 0;
-    color: #333;
+    color: #000;
 }
 
 .quick-setting-form select,
 .quick-setting-form input[type="datetime-local"] {
     font-size: 9pt;
-    padding: 6px 8px;
+    padding: 5px 6px;
     border: 1px solid #ccc;
     max-width: 280px;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 /* Filters form - horizontal layout */
@@ -1625,7 +1716,7 @@ table tr:last-child td {
 .filters-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
     align-items: flex-end;
 }
 
@@ -1639,14 +1730,14 @@ table tr:last-child td {
 .filter-item label {
     font-size: 8pt;
     font-weight: bold;
-    color: #555;
+    color: #828282;
 }
 
 .filter-item select {
     font-size: 9pt;
-    padding: 5px 8px;
+    padding: 4px 6px;
     border: 1px solid #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     min-width: 110px;
 }
 
@@ -1658,7 +1749,7 @@ table tr:last-child td {
 
 .filter-actions button,
 .filter-actions .button {
-    padding: 5px 10px;
+    padding: 4px 8px;
     font-size: 9pt;
 }
 
@@ -1680,27 +1771,27 @@ table tr:last-child td {
 .empty {
     color: #828282;
     font-style: italic;
-    padding: 24px;
+    padding: 16px;
     text-align: center;
     font-size: 9pt;
 }
 
 /* Calendar Styles */
 .calendar-nav {
-    margin: 12px 0;
+    margin: 8px 0;
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
     flex-wrap: wrap;
 }
 
 .calendar-controls {
-    margin: 12px 0;
-    padding: 12px;
+    margin: 8px 0;
+    padding: 10px;
     background: #fff;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    border-radius: 2px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
 }
 
 .calendar-layout {
@@ -1717,8 +1808,8 @@ table tr:last-child td {
     position: relative;
     overflow-x: auto;
     min-width: 0;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    border-radius: 2px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
 }
 
 .time-column {
@@ -1763,14 +1854,14 @@ table tr:last-child td {
     right: 5px;
     background: rgba(255, 102, 0, 0.08);
     border: 1px solid #ff6600;
-    border-left: 3px solid #ff6600;
-    padding: 6px;
+    border-left: 2px solid #ff6600;
+    padding: 4px;
     font-size: 8pt;
     overflow: hidden;
     z-index: 10;
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: move;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 
 .calendar-task a {
@@ -1797,9 +1888,9 @@ table tr:last-child td {
     overflow-x: auto;
     background: #fff;
     border: 1px solid #ddd;
-    padding: 8px;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    padding: 6px;
+    border-radius: 2px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
 }
 
 .week-day {
@@ -1808,7 +1899,7 @@ table tr:last-child td {
     border: 1px solid #eee;
     display: flex;
     flex-direction: column;
-    border-radius: 3px;
+    border-radius: 2px;
     overflow: hidden;
 }
 
@@ -1837,16 +1928,16 @@ table tr:last-child td {
 }
 
 .day-content {
-    padding: 8px;
+    padding: 6px;
     min-height: 200px;
     background: #fff;
 }
 
 .week-task {
     font-size: 8pt;
-    padding: 6px;
-    margin-bottom: 6px;
-    border-left: 3px solid #ff6600;
+    padding: 5px;
+    margin-bottom: 5px;
+    border-left: 2px solid #ff6600;
     background: rgba(255, 102, 0, 0.08);
     border-radius: 2px;
 }
@@ -1868,14 +1959,14 @@ table tr:last-child td {
     border: 1px solid #ddd;
     max-height: calc(100vh - 300px);
     overflow-y: auto;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    border-radius: 2px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
 }
 
 .sidebar-title {
     font-size: 10pt;
     font-weight: bold;
-    padding: 10px;
+    padding: 8px;
     background: #f9f9f9;
     border-bottom: 1px solid #eee;
 }
@@ -1912,7 +2003,7 @@ table tr:last-child td {
 }
 
 .task-item, .subtask-item {
-    padding: 6px 10px 6px 24px;
+    padding: 5px 8px 5px 20px;
     font-size: 8pt;
     cursor: move;
     border-left: 2px solid transparent;
@@ -1976,22 +2067,22 @@ table tr:last-child td {
 }
 
 .project-stats {
-    padding: 10px;
+    padding: 8px;
     background: #fff;
     border: 1px solid #f0f0f0;
-    margin-top: 6px;
-    border-radius: 3px;
+    margin-top: 4px;
+    border-radius: 2px;
 }
 
 .stat-row {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     align-items: center;
 }
 
 .stat-label {
-    color: #555;
+    color: #828282;
     font-size: 8pt;
 }
 
@@ -2030,11 +2121,11 @@ table tr:last-child td {
     .toolbox-dropdown {
         width: 100%;
         margin-left: 0;
-        margin-top: 4px;
+        margin-top: 0;
     }
 
     .toolbox-toggle {
-        width: 100%;
+        width: auto;
     }
 
     .toolbox-menu {
@@ -2082,10 +2173,10 @@ table tr:last-child td {
 /* Kanban Board */
 .kanban-board {
     display: flex;
-    gap: 16px;
-    margin-top: 16px;
+    gap: 12px;
+    margin-top: 10px;
     overflow-x: auto;
-    padding-bottom: 16px;
+    padding-bottom: 10px;
 }
 
 .kanban-column {
@@ -2093,7 +2184,7 @@ table tr:last-child td {
     min-width: 280px;
     background: #fff;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     display: flex;
     flex-direction: column;
     max-height: calc(100vh - 200px);
@@ -2117,16 +2208,16 @@ table tr:last-child td {
 .kanban-column-content {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 6px;
     min-height: 200px;
 }
 
 .kanban-card {
     background: #fff;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    padding: 10px;
-    margin-bottom: 8px;
+    border-radius: 2px;
+    padding: 8px;
+    margin-bottom: 6px;
     cursor: move;
     transition: box-shadow 0.2s;
 }
@@ -2141,7 +2232,7 @@ table tr:last-child td {
 
 .kanban-card-title {
     font-weight: bold;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .kanban-card-title a {
@@ -2156,7 +2247,7 @@ table tr:last-child td {
 .kanban-card-meta {
     font-size: 8pt;
     color: #828282;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 
 .dependency-group {
@@ -2213,9 +2304,9 @@ table tr:last-child td {
 
 .inline-field input[type="datetime-local"] {
     font-size: 8pt;
-    padding: 4px 6px;
+    padding: 3px 5px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     max-width: 180px;
 }
 
@@ -2229,12 +2320,12 @@ table tr:last-child td {
 .compact-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     font-size: 8pt;
-    padding: 3px 8px;
+    padding: 2px 6px;
     background: #f5f5f5;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 .compact-item a {
@@ -2249,7 +2340,7 @@ table tr:last-child td {
 .delete-inline {
     background: none;
     border: none;
-    color: #999;
+    color: #828282;
     cursor: pointer;
     padding: 0 2px;
     font-size: 10pt;
@@ -2267,9 +2358,9 @@ table tr:last-child td {
 
 .compact-add select {
     font-size: 8pt;
-    padding: 3px 6px;
+    padding: 2px 5px;
     border: 1px dashed #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     background: #fafafa;
     color: #828282;
     max-width: 160px;
@@ -2300,15 +2391,15 @@ table tr:last-child td {
 .task-overview {
     background: #f6f6ef;
     border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    margin-bottom: 16px;
+    border-radius: 2px;
+    margin-bottom: 10px;
 }
 
 .overview-row {
     display: flex;
     flex-wrap: wrap;
-    padding: 10px 14px;
-    gap: 16px 24px;
+    padding: 8px 10px;
+    gap: 12px 16px;
     align-items: center;
     border-bottom: 1px solid #e8e8e8;
 }
@@ -2340,8 +2431,8 @@ table tr:last-child td {
     color: #828282;
     font-size: 8pt;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    min-width: 45px;
+    letter-spacing: 0.3px;
+    min-width: 40px;
 }
 
 .field-value {
@@ -2360,10 +2451,10 @@ table tr:last-child td {
 }
 
 .progress-inline {
-    width: 80px;
-    height: 6px;
+    width: 70px;
+    height: 5px;
     background: #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     overflow: hidden;
 }
 
@@ -2375,7 +2466,7 @@ table tr:last-child td {
 
 .progress-text {
     font-size: 8pt;
-    color: #666;
+    color: #828282;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -2383,7 +2474,7 @@ table tr:last-child td {
 }
 
 .overview-value.muted {
-    color: #999;
+    color: #828282;
     font-style: italic;
 }
 
@@ -2397,9 +2488,9 @@ table tr:last-child td {
 /* Overview date inputs */
 .overview-dates input[type="datetime-local"] {
     font-size: 8pt;
-    padding: 4px 6px;
+    padding: 3px 5px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     background: #fff;
     max-width: 170px;
 }
@@ -2438,9 +2529,9 @@ table tr:last-child td {
 
 .schedule-fields .inline-field input[type="datetime-local"] {
     font-size: 8pt;
-    padding: 4px 6px;
+    padding: 3px 5px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     max-width: 175px;
 }
 
@@ -2460,9 +2551,9 @@ table tr:last-child td {
 .tag-chips .people-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border-radius: 3px;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: 2px;
     font-size: 8pt;
     border: 1px solid;
 }
@@ -2519,16 +2610,16 @@ table tr:last-child td {
 
 .tag-select .tag-search {
     width: 60px;
-    padding: 3px 6px;
+    padding: 2px 5px;
     border: 1px dashed #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 8pt;
     background: transparent;
     color: #828282;
 }
 
 .tag-select .tag-search::placeholder {
-    color: #999;
+    color: #828282;
 }
 
 .tag-select .tag-search:focus {
@@ -2550,8 +2641,8 @@ table tr:last-child td {
     overflow-y: auto;
     background: #f6f6ef;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border-radius: 2px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     z-index: 100;
 }
 
@@ -2562,7 +2653,7 @@ table tr:last-child td {
 .tag-option button {
     display: block;
     width: 100%;
-    padding: 6px 10px;
+    padding: 5px 8px;
     text-align: left;
     background: none;
     border: none;
@@ -2600,10 +2691,10 @@ table tr:last-child td {
     font-size: 9pt;
     max-height: 200px;
     overflow-y: auto;
-    padding: 8px 10px;
+    padding: 6px 8px;
     background: #fff;
     border: 1px solid #e8e8e8;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 .overview-description .content p:last-child {
@@ -2627,15 +2718,15 @@ table tr:last-child td {
     font-size: 8pt;
     background: #e8e8e8;
     color: #555;
-    padding: 2px 6px;
-    border-radius: 3px;
-    margin-right: 6px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    margin-right: 5px;
     font-weight: bold;
 }
 
 .page-title .seq-id {
     font-size: 10pt;
-    padding: 3px 8px;
+    padding: 2px 6px;
 }
 
 /* Dependencies row */
@@ -2663,12 +2754,12 @@ table tr:last-child td {
 .dependency-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
+    gap: 6px;
+    padding: 5px 6px;
     background: #f9f9f9;
     border: 1px solid #eee;
-    border-radius: 3px;
-    margin-bottom: 6px;
+    border-radius: 2px;
+    margin-bottom: 4px;
     font-size: 9pt;
 }
 
@@ -2706,9 +2797,9 @@ table tr:last-child td {
 .dep-search {
     width: 100%;
     font-size: 8pt;
-    padding: 6px 8px;
+    padding: 5px 6px;
     border: 1px dashed #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     background: #fafafa;
 }
 
@@ -2727,8 +2818,8 @@ table tr:last-child td {
     right: 0;
     background: #f6f6ef;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 2px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     max-height: 250px;
     overflow-y: auto;
     z-index: 100;
@@ -2746,7 +2837,7 @@ table tr:last-child td {
 .dep-option button {
     width: 100%;
     text-align: left;
-    padding: 8px 10px;
+    padding: 6px 8px;
     font-size: 8pt;
     background: none;
     border: none;
@@ -2785,9 +2876,9 @@ table tr:last-child td {
 .note-search {
     width: 100%;
     max-width: 300px;
-    padding: 6px 10px;
+    padding: 5px 8px;
     border: 1px dashed #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
     background: transparent;
 }
@@ -2808,8 +2899,8 @@ table tr:last-child td {
     overflow-y: auto;
     background: #f6f6ef;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 2px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     z-index: 1000;
 }
 
@@ -2820,7 +2911,7 @@ table tr:last-child td {
 .note-option button {
     width: 100%;
     text-align: left;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -2833,6 +2924,48 @@ table tr:last-child td {
 }
 
 .note-option.hidden {
+    display: none;
+}
+
+/* Mention dropdown for @mentions */
+.mention-dropdown {
+    display: none;
+    position: absolute;
+    min-width: 200px;
+    max-width: 300px;
+    max-height: 250px;
+    overflow-y: auto;
+    background: #f6f6ef;
+    border: 1px solid #ddd;
+    border-radius: 2px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    z-index: 1000;
+    padding: 4px 0;
+}
+
+.mention-option {
+    margin: 0;
+    padding: 0;
+}
+
+.mention-option button {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 9pt;
+    color: #000;
+}
+
+.mention-option button:hover,
+.mention-option.selected button {
+    background: #eee;
+}
+
+.mention-option.hidden {
     display: none;
 }
 
@@ -2933,10 +3066,10 @@ table tr:last-child td {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 10px;
+    padding: 5px 8px;
     background: #fff;
     border: 1px solid #e0e0e0;
-    border-radius: 4px;
+    border-radius: 2px;
 }
 
 .backlink-item a {
@@ -2996,9 +3129,9 @@ table tr:last-child td {
 .entity-search {
     width: 100%;
     max-width: 300px;
-    padding: 6px 10px;
+    padding: 5px 8px;
     border: 1px dashed #ccc;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
     background: transparent;
 }
@@ -3019,8 +3152,8 @@ table tr:last-child td {
     overflow-y: auto;
     background: #f6f6ef;
     border: 1px solid #ddd;
-    border-radius: 3px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 2px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     z-index: 1000;
 }
 
@@ -3031,7 +3164,7 @@ table tr:last-child td {
 .entity-option button {
     width: 100%;
     text-align: left;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -3092,8 +3225,8 @@ table tr:last-child td {
     background: none;
     border: 1px solid #ddd;
     color: #828282;
-    padding: 4px 8px;
-    border-radius: 3px;
+    padding: 3px 6px;
+    border-radius: 2px;
     cursor: pointer;
     font-size: 9pt;
 }
@@ -3117,26 +3250,26 @@ table tr:last-child td {
 .inline-create-form input[type="text"] {
     flex: 1;
     min-width: 200px;
-    padding: 6px 10px;
+    padding: 5px 8px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
 }
 
 .inline-create-form select {
-    padding: 6px 8px;
+    padding: 5px 6px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
     background: #fff;
 }
 
 .inline-create-form button {
-    padding: 6px 12px;
+    padding: 5px 10px;
     background: #ff6600;
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: pointer;
     font-size: 9pt;
     font-weight: bold;
@@ -3154,13 +3287,13 @@ table tr:last-child td {
 }
 
 .created-item {
-    padding: 6px 10px;
+    padding: 5px 8px;
     background: #fff;
     border: 1px solid #e0e0e0;
-    border-radius: 4px;
+    border-radius: 2px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .created-item a {
@@ -3182,18 +3315,18 @@ table tr:last-child td {
 
 .entity-create .create-input {
     flex: 1;
-    padding: 4px 8px;
+    padding: 3px 6px;
     border: 1px solid #ddd;
-    border-radius: 3px;
+    border-radius: 2px;
     font-size: 9pt;
 }
 
 .entity-create button {
-    padding: 4px 10px;
+    padding: 3px 8px;
     background: #ff6600;
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: pointer;
     font-size: 9pt;
 }
@@ -3252,17 +3385,17 @@ table tr:last-child td {
 
 /* Update form */
 .update-form {
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .update-form textarea {
     width: 100%;
     max-width: none;
-    min-height: 150px;
+    min-height: 120px;
 }
 
 .update-submit-btn {
-    margin-top: 5px;
+    margin-top: 4px;
 }
 
 /* Inline form styles */

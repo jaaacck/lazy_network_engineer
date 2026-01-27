@@ -15,11 +15,19 @@
         <div class="item">
             <div class="item-title">
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
             <div class="item-meta">Due: {{ item.due_date }}</div>
@@ -39,11 +47,19 @@
         <div class="item">
             <div class="item-title">
                 {% if item.type == 'task' %}
+                {% if item.epic_id %}
                 <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
                 {% else %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
                 {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status }}</span>
+                {% else %}
+                {% if item.epic_id %}
+                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% else %}
+                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
                 {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
             </div>
         </div>

@@ -2,12 +2,15 @@ import os
 import logging
 import hashlib
 import re
-import shutil
 import subprocess
 import urllib.request
 import urllib.error
 from datetime import datetime, date, timedelta
 import uuid
+import markdown
+import bleach
+import time
+import json
 from django.shortcuts import render, redirect
 from django.urls import reverse
 from django.http import JsonResponse, Http404
@@ -15,16 +18,72 @@ from django.core.cache import cache
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from .utils import (
-    load_entity, save_entity, validate_id, safe_join_path, 
+    validate_id, safe_join_path, 
     calculate_markdown_progress, calculate_checklist_progress
 )
-from .storage import SyncManager
+from .models import Entity, Status, Person, EntityPerson, Label, EntityLabel, Update
+from .storage.index_storage import IndexStorage
 
-# Initialize sync manager
-sync_manager = SyncManager()
+# Initialize index storage
+index_storage = IndexStorage()
 
 logger = logging.getLogger('pm')
 STATS_VERSION = 1
+
+# Allowed HTML tags and attributes for bleach sanitization (matching markdown_extras.py)
+ALLOWED_TAGS = [
+    'p', 'br', 'strong', 'em', 'u', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li', 'a', 'code', 'pre', 'blockquote', 'hr',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'span', 'input', 'img'
+]
+
+ALLOWED_ATTRIBUTES = {
+    'a': ['href', 'title'],
+    'table': ['class'],
+    'pre': ['class'],
+    'code': ['class'],
+    'blockquote': ['class'],
+    'div': ['class'],
+    'span': ['class'],
+    'input': ['type', 'checked', 'disabled'],
+    'img': ['src', 'alt', 'title', 'width', 'height', 'style']
+}
+
+def render_markdown(value):
+    """Convert markdown to HTML and sanitize output (matching markdownify filter)."""
+    if not value:
+        return ""
+    
+    cache_key = f"md:{hashlib.md5(value.encode('utf-8')).hexdigest()}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
+    # Convert markdown to HTML
+    html = markdown.markdown(
+        value,
+        extensions=[
+            'markdown.extensions.extra',
+            'markdown.extensions.sane_lists',
+            'markdown.extensions.nl2br',
+            'markdown.extensions.fenced_code'
+        ]
+    )
+    
+    # Handle tickboxes [ ] and [x]
+    html = re.sub(r'\[ \]', r'<input type="checkbox" disabled>', html)
+    html = re.sub(r'\[[xX]\]', r'<input type="checkbox" checked disabled>', html)
+    
+    # Sanitize HTML to prevent XSS
+    html = bleach.clean(
+        html,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRIBUTES,
+        strip=True
+    )
+    
+    cache.set(cache_key, html, 3600)
+    return html
 
 # Color palette for projects (distinct colors)
 PROJECT_COLORS = [
@@ -79,18 +138,15 @@ def normalize_people(raw):
 
 
 def add_activity_entry(metadata, activity_type, old_value=None, new_value=None, details=None):
-    """Add a system activity entry to metadata.
+    """Add a system activity entry to metadata and Update table.
     
     Args:
-        metadata: The entity metadata dict
+        metadata: The entity metadata dict (must have 'id' field)
         activity_type: Type of activity (e.g., 'status_changed', 'priority_changed', 'label_added')
         old_value: Previous value (optional)
         new_value: New value (optional)
         details: Additional details dict (optional)
     """
-    if 'updates' not in metadata:
-        metadata['updates'] = []
-    
     # Build activity message
     message_parts = []
     if activity_type == 'status_changed':
@@ -127,9 +183,16 @@ def add_activity_entry(metadata, activity_type, old_value=None, new_value=None, 
     else:
         message_parts.append(f"{activity_type}: {new_value or old_value}")
     
+    timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    content = ' '.join(message_parts)
+    
+    # Add to metadata dict for backward compatibility
+    if 'updates' not in metadata:
+        metadata['updates'] = []
+    
     activity_entry = {
-        'timestamp': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
-        'content': ' '.join(message_parts),
+        'timestamp': timestamp,
+        'content': content,
         'type': 'system',
         'activity_type': activity_type
     }
@@ -138,6 +201,15 @@ def add_activity_entry(metadata, activity_type, old_value=None, new_value=None, 
         activity_entry['details'] = details
     
     metadata['updates'].append(activity_entry)
+    
+    # Also save to Update table
+    entity_id = metadata.get('id')
+    if entity_id:
+        Update.objects.create(
+            entity_id=entity_id,
+            content=content,
+            timestamp=timestamp
+        )
 
 
 def get_all_labels_in_system():
@@ -147,68 +219,15 @@ def get_all_labels_in_system():
     if cached is not None:
         return cached
     
+    # Query Label table directly - get labels that are used by entities of relevant types
+    entities_with_labels = Entity.objects.filter(
+        type__in=['epic', 'task', 'subtask', 'note']
+    ).prefetch_related('labels')
+    
     labels = set()
-    
-    # Scan projects for epics, tasks and subtasks
-    projects_dir = safe_join_path('projects')
-    if os.path.exists(projects_dir):
-        try:
-            for p_id in os.listdir(projects_dir):
-                p_dir = os.path.join(projects_dir, p_id)
-                if not os.path.isdir(p_dir):
-                    continue
-                epics_dir = os.path.join(p_dir, 'epics')
-                if not os.path.exists(epics_dir):
-                    continue
-                for e_file in os.listdir(epics_dir):
-                    if not e_file.endswith('.md'):
-                        continue
-                    epic_id = e_file[:-3]
-                    # Check epic labels
-                    e_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                    if e_meta:
-                        for lbl in normalize_labels(e_meta.get('labels', [])):
-                            labels.add(lbl)
-                    
-                    tasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks')
-                    if not os.path.exists(tasks_dir):
-                        continue
-                    for t_file in os.listdir(tasks_dir):
-                        if not t_file.endswith('.md'):
-                            continue
-                        task_id = t_file[:-3]
-                        t_meta, _ = load_task(p_id, epic_id, task_id, metadata_only=True)
-                        if t_meta:
-                            for lbl in normalize_labels(t_meta.get('labels', [])):
-                                labels.add(lbl)
-                        # Check subtasks
-                        subtasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                        if os.path.exists(subtasks_dir):
-                            for s_file in os.listdir(subtasks_dir):
-                                if not s_file.endswith('.md'):
-                                    continue
-                                subtask_id = s_file[:-3]
-                                s_meta, _ = load_subtask(p_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                if s_meta:
-                                    for lbl in normalize_labels(s_meta.get('labels', [])):
-                                        labels.add(lbl)
-        except OSError:
-            pass
-    
-    # Scan notes
-    notes_dir = safe_join_path('notes')
-    if os.path.exists(notes_dir):
-        try:
-            for n_file in os.listdir(notes_dir):
-                if not n_file.endswith('.md'):
-                    continue
-                note_id = n_file[:-3]
-                n_meta, _ = load_note(note_id, metadata_only=True)  # Only need metadata for labels
-                if n_meta:
-                    for lbl in normalize_labels(n_meta.get('labels', [])):
-                        labels.add(lbl)
-        except OSError:
-            pass
+    for entity in entities_with_labels:
+        for entity_label in entity.labels.all():
+            labels.add(entity_label.label.name)
     
     result = sorted(labels, key=str.lower)
     cache.set(cache_key, result, 300)  # Cache for 5 minutes instead of 60 seconds
@@ -227,68 +246,140 @@ def find_person_by_name(person_name):
     if cached is not None:
         return cached
     
-    # Build name-to-ID mapping if not cached
-    name_to_id_cache_key = "person_name_to_id_map:v1"
-    name_to_id_map = cache.get(name_to_id_cache_key)
+    # Try to find person by name (case-insensitive)
+    try:
+        person = Person.objects.filter(name__iexact=person_normalized).first()
+        if person:
+            cache.set(cache_key, person.id, 300)
+            return person.id
+    except Exception as e:
+        logger.warning(f"Error finding person by name '{person_normalized}': {e}")
     
-    if name_to_id_map is None:
-        # Build the mapping by scanning people directory once
-        name_to_id_map = {}
-        people_dir = safe_join_path('people')
-        if os.path.exists(people_dir):
-            try:
-                for p_file in os.listdir(people_dir):
-                    if not p_file.endswith('.md'):
-                        continue
-                    person_id = p_file[:-3]
-                    # Validate it is a person ID
-                    if not validate_id(person_id, 'person'):
-                        continue
-                    p_meta, _ = load_person(person_id, metadata_only=True)
-                    if p_meta:
-                        person_name_from_file = p_meta.get('name', '').strip().lstrip('@')
-                        if person_name_from_file:
-                            name_to_id_map[person_name_from_file.lower()] = person_id
-            except OSError:
-                pass
-        
-        # Cache the mapping for 5 minutes
-        cache.set(name_to_id_cache_key, name_to_id_map, 300)
-    
-    # Look up in the mapping
-    person_id = name_to_id_map.get(person_normalized.lower())
-    
-    # Cache individual lookups for 5 minutes
-    if person_id:
-        cache.set(cache_key, person_id, 300)
-    
-    return person_id
+    return None
 
 
 def load_person(person_id, metadata_only=False):
-    """Load a person from disk by person_id."""
+    """Load a person from database by person_id."""
     if not validate_id(person_id, 'person'):
         return None, None
-    person_path = safe_join_path('people', f'{person_id}.md')
-    if not os.path.exists(person_path):
+    
+    try:
+        person = Person.objects.get(id=person_id)
+        # Build metadata from Person model
+        metadata = {
+            'id': person.id,
+            'name': person.name,
+        }
+        if person.display_name:
+            metadata['display_name'] = person.display_name
+        if person.email:
+            metadata['email'] = person.email
+        
+        # Merge with metadata_json if it exists (for backward compatibility)
+        if person.metadata_json:
+            try:
+                json_metadata = json.loads(person.metadata_json)
+                metadata.update(json_metadata)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        # For content, we still need to check Entity table for backward compatibility
+        # In the future, we can add a content field to Person model
+        content = None
+        if not metadata_only:
+            try:
+                entity = Entity.objects.get(id=person_id, type='person')
+                content = entity.content
+            except Entity.DoesNotExist:
+                content = ''
+        
+        return metadata, content
+    except Person.DoesNotExist:
         return None, None
-    return sync_manager.load_entity_with_index(
-        person_path, person_id, 'person',
-        'Untitled Person', 'active', metadata_only=metadata_only
-    )
 
 
 def save_person(person_id, metadata, content=''):
-    """Save a person to disk by person_id."""
+    """Save a person to database by person_id."""
     if not validate_id(person_id, 'person'):
         raise Http404("Invalid person ID")
-    person_path = safe_join_path('people', f'{person_id}.md')
-    os.makedirs(os.path.dirname(person_path), exist_ok=True)
     
     # Ensure person_id is in metadata
     metadata['id'] = person_id
     
-    sync_manager.save_entity_with_sync(person_path, person_id, 'person', metadata, content)
+    # Update or create Person record
+    person, created = Person.objects.update_or_create(
+        id=person_id,
+        defaults={
+            'name': metadata.get('name', '').strip().lstrip('@'),
+            'display_name': metadata.get('display_name', ''),
+            'email': metadata.get('email', ''),
+            'metadata_json': json.dumps(metadata),  # Keep for backward compatibility
+        }
+    )
+    
+    # Also save to Entity table for backward compatibility and search index
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=person_id,
+        entity_type='person',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
+
+
+def ensure_person_exists(person_name):
+    """Ensure a person exists by name. Creates the person if it doesn't exist.
+    Returns the normalized person name.
+    This function should be called whenever a person is added to any entity."""
+    if not person_name:
+        return person_name
+    
+    person_normalized = person_name.strip().lstrip('@')
+    if not person_normalized:
+        return person_name
+    
+    # Check if person already exists
+    person_id = find_person_by_name(person_normalized)
+    
+    # If person doesn't exist, create it
+    if not person_id:
+        person_id = f'person-{uuid.uuid4().hex[:8]}'
+        metadata = {
+            'name': person_normalized,
+            'created': datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        }
+        save_person(person_id, metadata)
+        # Invalidate caches
+        cache.delete("all_people:v1")
+        cache.delete("all_people:v3")
+        cache.delete("person_name_to_id_map:v1")
+        logger.info(f"Auto-created person '{person_normalized}' with ID {person_id}")
+    
+    return person_normalized
+
+
+def ensure_people_exist(people_list):
+    """Ensure all people in a list exist. Creates any missing persons.
+    Returns a list of normalized person names.
+    This function should be called whenever a list of people is set on any entity."""
+    if not people_list:
+        return people_list
+    
+    normalized_people = []
+    for person_name in people_list:
+        normalized = ensure_person_exists(person_name)
+        if normalized:
+            normalized_people.append(normalized)
+    
+    return normalized_people
 
 
 def get_all_people_names_in_system():
@@ -299,7 +390,6 @@ def get_all_people_names_in_system():
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
-    
     people_names = set()
     
     # Get all person IDs and extract names (this is already cached)
@@ -331,99 +421,17 @@ def get_all_people_in_system():
     
     people_ids = set()
     
-    # First, scan people directory for standalone people
-    people_dir = safe_join_path('people')
-    if os.path.exists(people_dir):
-        try:
-            for p_file in os.listdir(people_dir):
-                if not p_file.endswith('.md'):
-                    continue
-                person_id = p_file[:-3]
-                if validate_id(person_id, 'person'):
-                    people_ids.add(person_id)
-        except OSError:
-            pass
+    # First, get all standalone people from database
+    people = Entity.objects.filter(type='person')
+    for person in people:
+        people_ids.add(person.id)
     
-    # Then scan projects for epics, tasks and subtasks
-    projects_dir = safe_join_path('projects')
-    if os.path.exists(projects_dir):
-        try:
-            for p_id in os.listdir(projects_dir):
-                p_dir = os.path.join(projects_dir, p_id)
-                if not os.path.isdir(p_dir):
-                    continue
-                # Check project people
-                p_meta, _ = load_project(p_id, metadata_only=True)
-                if p_meta:
-                    for person_name in normalize_people(p_meta.get('people', [])):
-                        person_id = find_person_by_name(person_name)
-                        if person_id:
-                            people_ids.add(person_id)
-                
-                epics_dir = os.path.join(p_dir, 'epics')
-                if not os.path.exists(epics_dir):
-                    continue
-                for e_file in os.listdir(epics_dir):
-                    if not e_file.endswith('.md'):
-                        continue
-                    epic_id = e_file[:-3]
-                    # Check epic people
-                    e_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                    if e_meta:
-                        for person_name in normalize_people(e_meta.get('people', [])):
-                            person_id = find_person_by_name(person_name)
-                            if person_id:
-                                people_ids.add(person_id)
-                    
-                    tasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks')
-                    if not os.path.exists(tasks_dir):
-                        continue
-                    for t_file in os.listdir(tasks_dir):
-                        if not t_file.endswith('.md'):
-                            continue
-                        task_id = t_file[:-3]
-                        t_meta, _ = load_task(p_id, epic_id, task_id, metadata_only=True)
-                        if t_meta:
-                            for person_name in normalize_people(t_meta.get('people', [])):
-                                person_id = find_person_by_name(person_name)
-                                if person_id:
-                                    people_ids.add(person_id)
-                        # Check subtasks
-                        subtasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                        if os.path.exists(subtasks_dir):
-                            for s_file in os.listdir(subtasks_dir):
-                                if not s_file.endswith('.md'):
-                                    continue
-                                subtask_id = s_file[:-3]
-                                s_meta, _ = load_subtask(p_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                if s_meta:
-                                    for person_name in normalize_people(s_meta.get('people', [])):
-                                        person_id = find_person_by_name(person_name)
-                                        if person_id:
-                                            people_ids.add(person_id)
-        except OSError:
-            pass
-    
-    # Scan notes
-    notes_dir = safe_join_path('notes')
-    if os.path.exists(notes_dir):
-        try:
-            for n_file in os.listdir(notes_dir):
-                if not n_file.endswith('.md'):
-                    continue
-                note_id = n_file[:-3]
-                n_meta, _ = load_note(note_id, metadata_only=True)  # Only need metadata
-                if n_meta:
-                    for person_ref in normalize_people(n_meta.get('people', [])):
-                        # Check if it is already a person ID
-                        if person_ref.startswith('person-') and len(person_ref) == 15 and validate_id(person_ref, 'person'):
-                            people_ids.add(person_ref)
-                        else:
-                            person_id = find_person_by_name(person_ref)
-                            if person_id:
-                                people_ids.add(person_id)
-        except OSError:
-            pass
+    # Then scan all entities for people references
+    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask', 'note']).prefetch_related('assigned_people')
+    for entity in entities:
+        # Get people from EntityPerson relationships
+        for entity_person in entity.assigned_people.all():
+            people_ids.add(entity_person.person.id)
     
     result = sorted(people_ids)
     cache.set(cache_key, result, 300)  # Cache for 5 minutes instead of 60 seconds
@@ -438,22 +446,13 @@ def get_all_notes_in_system():
         return cached
     
     notes = []
-    notes_dir = safe_join_path('notes')
-    if os.path.exists(notes_dir):
-        try:
-            for n_file in os.listdir(notes_dir):
-                if not n_file.endswith('.md'):
-                    continue
-                note_id = n_file[:-3]
-                n_meta, _ = load_note(note_id, metadata_only=True)  # Only need metadata, not full content
-                if n_meta:
-                    notes.append({
-                        'id': note_id,
-                        'title': n_meta.get('title', 'Untitled Note'),
-                        'created': n_meta.get('created', '')
-                    })
-        except OSError:
-            pass
+    note_entities = Entity.objects.filter(type='note')
+    for entity in note_entities:
+        notes.append({
+            'id': entity.id,
+            'title': entity.title or 'Untitled Note',
+            'created': entity.created or ''
+        })
     
     # Sort by title
     result = sorted(notes, key=lambda x: x['title'].lower())
@@ -475,75 +474,47 @@ def get_all_entities_for_linking():
         'subtasks': []
     }
     
-    projects_dir = safe_join_path('projects')
-    if os.path.exists(projects_dir):
-        try:
-            for p_id in os.listdir(projects_dir):
-                p_dir = os.path.join(projects_dir, p_id)
-                if not os.path.isdir(p_dir):
-                    continue
-                
-                # Load project
-                p_meta, _ = load_project(p_id, metadata_only=True)
-                if p_meta:
-                    entities['projects'].append({
-                        'id': p_id,
-                        'title': p_meta.get('title', 'Untitled Project'),
-                        'seq_id': ''
-                    })
-                
-                # Load epics
-                epics_dir = safe_join_path('projects', p_id, 'epics')
-                if os.path.exists(epics_dir):
-                    for e_file in os.listdir(epics_dir):
-                        if not e_file.endswith('.md'):
-                            continue
-                        epic_id = e_file[:-3]
-                        e_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                        if e_meta:
-                            entities['epics'].append({
-                                'id': epic_id,
-                                'project_id': p_id,
-                                'title': e_meta.get('title', 'Untitled Epic'),
-                                'seq_id': e_meta.get('seq_id', '')
-                            })
-                        
-                        # Load tasks
-                        tasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks')
-                        if os.path.exists(tasks_dir):
-                            for t_file in os.listdir(tasks_dir):
-                                if not t_file.endswith('.md'):
-                                    continue
-                                task_id = t_file[:-3]
-                                t_meta, _ = load_task(p_id, epic_id, task_id, metadata_only=True)
-                                if t_meta:
-                                    entities['tasks'].append({
-                                        'id': task_id,
-                                        'project_id': p_id,
-                                        'epic_id': epic_id,
-                                        'title': t_meta.get('title', 'Untitled Task'),
-                                        'seq_id': t_meta.get('seq_id', '')
-                                    })
-                                    
-                                    # Load subtasks
-                                    subtasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                                    if os.path.exists(subtasks_dir):
-                                        for s_file in os.listdir(subtasks_dir):
-                                            if not s_file.endswith('.md'):
-                                                continue
-                                            subtask_id = s_file[:-3]
-                                            s_meta, _ = load_subtask(p_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                            if s_meta:
-                                                entities['subtasks'].append({
-                                                    'id': subtask_id,
-                                                    'project_id': p_id,
-                                                    'epic_id': epic_id,
-                                                    'task_id': task_id,
-                                                    'title': s_meta.get('title', 'Untitled Subtask'),
-                                                    'seq_id': s_meta.get('seq_id', '')
-                                                })
-        except OSError:
-            pass
+    # Load projects
+    projects = Entity.objects.filter(type='project')
+    for entity in projects:
+        entities['projects'].append({
+            'id': entity.id,
+            'title': entity.title or 'Untitled Project',
+            'seq_id': ''
+        })
+    
+    # Load epics
+    epics = Entity.objects.filter(type='epic')
+    for entity in epics:
+        entities['epics'].append({
+            'id': entity.id,
+            'project_id': entity.project_id,
+            'title': entity.title or 'Untitled Epic',
+            'seq_id': entity.seq_id or ''
+        })
+    
+    # Load tasks
+    tasks = Entity.objects.filter(type='task')
+    for entity in tasks:
+        entities['tasks'].append({
+            'id': entity.id,
+            'project_id': entity.project_id,
+            'epic_id': entity.epic_id,
+            'title': entity.title or 'Untitled Task',
+            'seq_id': entity.seq_id or ''
+        })
+    
+    # Load subtasks
+    subtasks = Entity.objects.filter(type='subtask')
+    for entity in subtasks:
+        entities['subtasks'].append({
+            'id': entity.id,
+            'project_id': entity.project_id,
+            'epic_id': entity.epic_id,
+            'task_id': entity.task_id,
+            'title': entity.title or 'Untitled Subtask',
+            'seq_id': entity.seq_id or ''
+        })
     
     # Sort all by title
     for key in entities:
@@ -562,76 +533,41 @@ def find_note_backlinks(note_id):
         'subtasks': []
     }
     
-    projects_dir = safe_join_path('projects')
-    if not os.path.exists(projects_dir):
-        return backlinks
+    # Query all entities that might reference this note
+    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask'])
     
-    try:
-        for p_id in os.listdir(projects_dir):
-            p_dir = os.path.join(projects_dir, p_id)
-            if not os.path.isdir(p_dir):
-                continue
-            
-            # Check project
-            p_meta, _ = load_project(p_id, metadata_only=True)
-            if p_meta and note_id in p_meta.get('notes', []):
+    for entity in entities:
+        notes_list = entity.notes or []
+        if note_id in notes_list:
+            if entity.type == 'project':
                 backlinks['projects'].append({
-                    'id': p_id,
-                    'title': p_meta.get('title', 'Untitled Project')
+                    'id': entity.id,
+                    'title': entity.title or 'Untitled Project'
                 })
-            
-            # Check epics
-            epics_dir = safe_join_path('projects', p_id, 'epics')
-            if os.path.exists(epics_dir):
-                for e_file in os.listdir(epics_dir):
-                    if not e_file.endswith('.md'):
-                        continue
-                    epic_id = e_file[:-3]
-                    e_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                    if e_meta and note_id in e_meta.get('notes', []):
-                        backlinks['epics'].append({
-                            'id': epic_id,
-                            'project_id': p_id,
-                            'title': e_meta.get('title', 'Untitled Epic'),
-                            'seq_id': e_meta.get('seq_id', '')
-                        })
-                    
-                    # Check tasks
-                    tasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks')
-                    if os.path.exists(tasks_dir):
-                        for t_file in os.listdir(tasks_dir):
-                            if not t_file.endswith('.md'):
-                                continue
-                            task_id = t_file[:-3]
-                            t_meta, _ = load_task(p_id, epic_id, task_id, metadata_only=True)
-                            if t_meta and note_id in t_meta.get('notes', []):
-                                backlinks['tasks'].append({
-                                    'id': task_id,
-                                    'project_id': p_id,
-                                    'epic_id': epic_id,
-                                    'title': t_meta.get('title', 'Untitled Task'),
-                                    'seq_id': t_meta.get('seq_id', '')
-                                })
-                            
-                            # Check subtasks
-                            subtasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                            if os.path.exists(subtasks_dir):
-                                for s_file in os.listdir(subtasks_dir):
-                                    if not s_file.endswith('.md'):
-                                        continue
-                                    subtask_id = s_file[:-3]
-                                    s_meta, _ = load_subtask(p_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                    if s_meta and note_id in s_meta.get('notes', []):
-                                        backlinks['subtasks'].append({
-                                            'id': subtask_id,
-                                            'project_id': p_id,
-                                            'epic_id': epic_id,
-                                            'task_id': task_id,
-                                            'title': s_meta.get('title', 'Untitled Subtask'),
-                                            'seq_id': s_meta.get('seq_id', '')
-                                        })
-    except OSError:
-        pass
+            elif entity.type == 'epic':
+                backlinks['epics'].append({
+                    'id': entity.id,
+                    'project_id': entity.project_id,
+                    'title': entity.title or 'Untitled Epic',
+                    'seq_id': entity.seq_id or ''
+                })
+            elif entity.type == 'task':
+                backlinks['tasks'].append({
+                    'id': entity.id,
+                    'project_id': entity.project_id,
+                    'epic_id': entity.epic_id,
+                    'title': entity.title or 'Untitled Task',
+                    'seq_id': entity.seq_id or ''
+                })
+            elif entity.type == 'subtask':
+                backlinks['subtasks'].append({
+                    'id': entity.id,
+                    'project_id': entity.project_id,
+                    'epic_id': entity.epic_id,
+                    'task_id': entity.task_id,
+                    'title': entity.title or 'Untitled Subtask',
+                    'seq_id': entity.seq_id or ''
+                })
     
     return backlinks
 
@@ -651,254 +587,337 @@ def get_next_seq_id(project_id, entity_type):
     
     max_seq = 0
     
-    if entity_type == 'epic':
-        # Scan all epics in the project
-        epics_dir = safe_join_path('projects', project_id, 'epics')
-        if os.path.exists(epics_dir):
+    # Query all entities of this type in the project
+    entities = Entity.objects.filter(type=entity_type, project_id=project_id)
+    
+    for entity in entities:
+        seq = entity.seq_id or ''
+        if seq and seq.startswith(prefix):
             try:
-                for filename in os.listdir(epics_dir):
-                    if filename.endswith('.md'):
-                        epic_id = filename[:-3]
-                        epic_metadata, _ = load_epic(project_id, epic_id, metadata_only=True)
-                        if epic_metadata:
-                            seq = epic_metadata.get('seq_id', '')
-                            if seq and seq.startswith('e'):
-                                try:
-                                    num = int(seq[1:])
-                                    max_seq = max(max_seq, num)
-                                except ValueError:
-                                    pass
-            except OSError:
-                pass
-    elif entity_type == 'task':
-        # Scan all tasks across all epics in the project
-        epics_dir = safe_join_path('projects', project_id, 'epics')
-        if os.path.exists(epics_dir):
-            try:
-                for epic_folder in os.listdir(epics_dir):
-                    epic_path = os.path.join(epics_dir, epic_folder)
-                    if os.path.isdir(epic_path):
-                        tasks_dir = os.path.join(epic_path, 'tasks')
-                        if os.path.exists(tasks_dir):
-                            for filename in os.listdir(tasks_dir):
-                                if filename.endswith('.md'):
-                                    task_id = filename[:-3]
-                                    task_metadata, _ = load_task(project_id, epic_folder, task_id, metadata_only=True)
-                                    if task_metadata:
-                                        seq = task_metadata.get('seq_id', '')
-                                        if seq and seq.startswith('t'):
-                                            try:
-                                                num = int(seq[1:])
-                                                max_seq = max(max_seq, num)
-                                            except ValueError:
-                                                pass
-            except OSError:
-                pass
-    else:  # subtask
-        # Scan all subtasks across all tasks in all epics in the project
-        epics_dir = safe_join_path('projects', project_id, 'epics')
-        if os.path.exists(epics_dir):
-            try:
-                for epic_folder in os.listdir(epics_dir):
-                    epic_path = os.path.join(epics_dir, epic_folder)
-                    if os.path.isdir(epic_path):
-                        tasks_dir = os.path.join(epic_path, 'tasks')
-                        if os.path.exists(tasks_dir):
-                            for task_folder in os.listdir(tasks_dir):
-                                task_path = os.path.join(tasks_dir, task_folder)
-                                if os.path.isdir(task_path):
-                                    subtasks_dir = os.path.join(task_path, 'subtasks')
-                                    if os.path.exists(subtasks_dir):
-                                        for filename in os.listdir(subtasks_dir):
-                                            if filename.endswith('.md'):
-                                                subtask_id = filename[:-3]
-                                                subtask_metadata, _ = load_subtask(project_id, epic_folder, task_folder, subtask_id, metadata_only=True)
-                                                if subtask_metadata:
-                                                    seq = subtask_metadata.get('seq_id', '')
-                                                    if seq and seq.startswith('st'):
-                                                        try:
-                                                            num = int(seq[2:])
-                                                            max_seq = max(max_seq, num)
-                                                        except ValueError:
-                                                            pass
-            except OSError:
+                # Extract number after prefix
+                num_str = seq[len(prefix):]
+                num = int(num_str)
+                max_seq = max(max_seq, num)
+            except ValueError:
                 pass
     
     return f'{prefix}{max_seq + 1}'
 
 
+def _merge_people_from_entityperson(entity, metadata):
+    """Merge people from EntityPerson relationships into metadata if not already present."""
+    if 'people' not in metadata or not metadata['people']:
+        # Load people from EntityPerson relationships
+        entity_people = EntityPerson.objects.filter(entity=entity).select_related('person')
+        people_names = [ep.person.name for ep in entity_people]
+        if people_names:
+            metadata['people'] = people_names
+    return metadata
+
+
+def _build_metadata_from_entity(entity):
+    """Build metadata dict from Entity database fields."""
+    metadata = {
+        'id': entity.id,
+        'title': entity.title,
+        'status': entity.status or '',
+        'priority': entity.priority,
+        'created': entity.created or '',
+        'updated': entity.updated or '',
+        'due_date': entity.due_date or '',
+        'schedule_start': entity.schedule_start or '',
+        'schedule_end': entity.schedule_end or '',
+        'labels': [el.label.name for el in entity.labels.all()],
+        'people': [ep.person.name for ep in entity.assigned_people.all()],
+        'notes': entity.notes or [],
+        'dependencies': entity.dependencies or [],
+        'checklist': entity.checklist or [],
+        'stats': entity.stats or {},
+        'seq_id': entity.seq_id or '',
+        'archived': entity.archived,
+        'is_inbox_epic': entity.is_inbox_epic,
+        'color': entity.color or '',
+        'stats_version': entity.stats_version,
+        'stats_updated': entity.stats_updated.isoformat() if entity.stats_updated else '',
+        'updates': [{'timestamp': u.timestamp, 'content': u.content} 
+                   for u in Update.objects.filter(entity_id=entity.id).order_by('timestamp')],
+    }
+    # Add relationship fields based on entity type
+    if entity.project_id:
+        metadata['project_id'] = entity.project_id
+    if entity.epic_id:
+        metadata['epic_id'] = entity.epic_id
+    if entity.task_id:
+        metadata['task_id'] = entity.task_id
+    return metadata
+
+
+def _status_display_fallback(status_name):
+    """Resolve display name from Status table when entity.status_fk is null."""
+    s = Status.objects.filter(name=status_name, is_active=True).first()
+    return s.display_name if s else (status_name or '').replace('_', ' ').title()
+
+
 def load_project(project_id, metadata_only=False):
-    """Load a project from disk."""
+    """Load a project from database."""
     if not is_valid_project_id(project_id):
         logger.warning(f"Invalid project ID: {project_id}")
         return None, None
 
-    project_path = safe_join_path('projects', f'{project_id}.md')
-    # Use sync manager for index-aware loading
-    return sync_manager.load_entity_with_index(
-        project_path, project_id, 'project', 
-        'Untitled Project', 'active', metadata_only
-    )
+    try:
+        entity = Entity.objects.select_related('status_fk').get(id=project_id, type='project')
+        # Build metadata from Entity fields
+        metadata = _build_metadata_from_entity(entity)
+        metadata = _merge_people_from_entityperson(entity, metadata)
+        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        content = entity.content if not metadata_only else None
+        return metadata, content
+    except Entity.DoesNotExist:
+        return None, None
 
 
 def save_project(project_id, metadata, content):
-    """Save a project to disk."""
+    """Save a project to database."""
     if not is_valid_project_id(project_id):
         raise Http404("Invalid project ID")
 
-    project_path = safe_join_path('projects', f'{project_id}.md')
-    # Use sync manager to save and sync to index
-    sync_manager.save_entity_with_sync(project_path, project_id, 'project', metadata, content)
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=project_id,
+        entity_type='project',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
 
 
 def load_epic(project_id, epic_id, metadata_only=False):
-    """Load an epic from disk."""
+    """Load an epic from database."""
     if not is_valid_project_id(project_id) or not validate_id(epic_id, 'epic'):
         logger.warning(f"Invalid IDs: project={project_id}, epic={epic_id}")
         return None, None
 
-    epic_path = safe_join_path('projects', project_id, 'epics', f'{epic_id}.md')
-    # Add project_id to metadata for relationship tracking
-    metadata, content = sync_manager.load_entity_with_index(
-        epic_path, epic_id, 'epic', 
-        'Untitled Epic', 'active', metadata_only
-    )
-    if metadata is not None and 'project_id' not in metadata:
-        metadata['project_id'] = project_id
-    return metadata, content
+    try:
+        entity = Entity.objects.select_related('status_fk').get(id=epic_id, type='epic', project_id=project_id)
+        # Build metadata from Entity fields
+        metadata = _build_metadata_from_entity(entity)
+        if 'project_id' not in metadata:
+            metadata['project_id'] = project_id
+        metadata = _merge_people_from_entityperson(entity, metadata)
+        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        content = entity.content if not metadata_only else None
+        return metadata, content
+    except Entity.DoesNotExist:
+        return None, None
 
 
 def save_epic(project_id, epic_id, metadata, content):
-    """Save an epic to disk."""
+    """Save an epic to database."""
     if not is_valid_project_id(project_id) or not validate_id(epic_id, 'epic'):
         raise Http404("Invalid IDs")
 
-    epic_path = safe_join_path('projects', project_id, 'epics', f'{epic_id}.md')
     # Ensure project_id is in metadata for relationship tracking
     if 'project_id' not in metadata:
         metadata['project_id'] = project_id
-    sync_manager.save_entity_with_sync(epic_path, epic_id, 'epic', metadata, content)
+    
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=epic_id,
+        entity_type='epic',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
     update_project_stats(project_id)
 
 
-def load_task(project_id, epic_id, task_id, metadata_only=False):
-    """Load a task from disk."""
-    if not (is_valid_project_id(project_id) and
-            validate_id(epic_id, 'epic') and
-            validate_id(task_id, 'task')):
-        logger.warning(f"Invalid IDs: project={project_id}, epic={epic_id}, task={task_id}")
+def load_task(project_id, task_id, epic_id=None, metadata_only=False):
+    """Load a task from database. Epic is optional - if None, task is directly under project."""
+    if not (is_valid_project_id(project_id) and validate_id(task_id, 'task')):
+        logger.warning(f"Invalid IDs: project={project_id}, task={task_id}")
+        return None, None
+    
+    # Validate epic_id if provided
+    if epic_id is not None and not validate_id(epic_id, 'epic'):
+        logger.warning(f"Invalid epic ID: {epic_id}")
         return None, None
 
-    task_path = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', f'{task_id}.md')
-    # Add relationship IDs to metadata
-    metadata, content = sync_manager.load_entity_with_index(
-        task_path, task_id, 'task', 
-        'Untitled Task', 'todo', metadata_only
-    )
-    if metadata is not None:
+    try:
+        query = Entity.objects.select_related('status_fk').filter(id=task_id, type='task', project_id=project_id)
+        if epic_id:
+            query = query.filter(epic_id=epic_id)
+        else:
+            query = query.filter(epic_id__isnull=True)
+        
+        entity = query.get()
+        # Build metadata from Entity fields
+        metadata = _build_metadata_from_entity(entity)
         if 'project_id' not in metadata:
             metadata['project_id'] = project_id
-        if 'epic_id' not in metadata:
+        if epic_id and 'epic_id' not in metadata:
             metadata['epic_id'] = epic_id
-    return metadata, content
+        elif not epic_id and 'epic_id' in metadata:
+            metadata.pop('epic_id', None)
+        metadata = _merge_people_from_entityperson(entity, metadata)
+        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        content = entity.content if not metadata_only else None
+        return metadata, content
+    except Entity.DoesNotExist:
+        return None, None
 
 
-def save_task(project_id, epic_id, task_id, metadata, content):
-    """Save a task to disk."""
-    if not (is_valid_project_id(project_id) and
-            validate_id(epic_id, 'epic') and
-            validate_id(task_id, 'task')):
+def save_task(project_id, task_id, metadata, content, epic_id=None):
+    """Save a task to database. Epic is optional - if None, task is directly under project."""
+    if not (is_valid_project_id(project_id) and validate_id(task_id, 'task')):
         raise Http404("Invalid IDs")
+    
+    # Validate epic_id if provided
+    if epic_id is not None and not validate_id(epic_id, 'epic'):
+        raise Http404("Invalid epic ID")
 
-    task_path = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', f'{task_id}.md')
+    # Determine epic_id from metadata if not provided
+    if epic_id is None:
+        epic_id = metadata.get('epic_id')
+    
     # Ensure relationship IDs are in metadata
     if 'project_id' not in metadata:
         metadata['project_id'] = project_id
-    if 'epic_id' not in metadata:
-        metadata['epic_id'] = epic_id
-    sync_manager.save_entity_with_sync(task_path, task_id, 'task', metadata, content)
+    if epic_id:
+        if 'epic_id' not in metadata:
+            metadata['epic_id'] = epic_id
+    else:
+        # Remove epic_id if task is not under an epic
+        metadata.pop('epic_id', None)
+    
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=task_id,
+        entity_type='task',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
     update_project_stats(project_id)
 
 
-def load_subtask(project_id, epic_id, task_id, subtask_id, metadata_only=False):
-    """Load a subtask from disk."""
+def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=False):
+    """Load a subtask from database. Epic is optional - if None, task is directly under project."""
     if not (is_valid_project_id(project_id) and
-            validate_id(epic_id, 'epic') and
             validate_id(task_id, 'task') and
             validate_id(subtask_id, 'subtask')):
-        logger.warning(f"Invalid IDs: project={project_id}, epic={epic_id}, task={task_id}, subtask={subtask_id}")
+        logger.warning(f"Invalid IDs: project={project_id}, task={task_id}, subtask={subtask_id}")
+        return None, None
+    
+    # Validate epic_id if provided
+    if epic_id is not None and not validate_id(epic_id, 'epic'):
+        logger.warning(f"Invalid epic ID: {epic_id}")
         return None, None
 
-    subtask_path = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks', f'{subtask_id}.md')
-    # Add relationship IDs to metadata
-    metadata, content = sync_manager.load_entity_with_index(
-        subtask_path, subtask_id, 'subtask', 
-        'Untitled Subtask', 'todo', metadata_only
-    )
-    if metadata is not None:
+    try:
+        query = Entity.objects.select_related('status_fk').filter(id=subtask_id, type='subtask', project_id=project_id, task_id=task_id)
+        if epic_id:
+            query = query.filter(epic_id=epic_id)
+        else:
+            query = query.filter(epic_id__isnull=True)
+        
+        entity = query.get()
+        # Build metadata from Entity fields
+        metadata = _build_metadata_from_entity(entity)
         if 'project_id' not in metadata:
             metadata['project_id'] = project_id
-        if 'epic_id' not in metadata:
+        if epic_id and 'epic_id' not in metadata:
             metadata['epic_id'] = epic_id
+        elif not epic_id and 'epic_id' in metadata:
+            metadata.pop('epic_id', None)
         if 'task_id' not in metadata:
             metadata['task_id'] = task_id
-    return metadata, content
+        metadata = _merge_people_from_entityperson(entity, metadata)
+        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        content = entity.content if not metadata_only else None
+        return metadata, content
+    except Entity.DoesNotExist:
+        return None, None
 
 
-def save_subtask(project_id, epic_id, task_id, subtask_id, metadata, content):
-    """Save a subtask to disk."""
+def save_subtask(project_id, task_id, subtask_id, metadata, content, epic_id=None):
+    """Save a subtask to database. Epic is optional - if None, task is directly under project."""
     if not (is_valid_project_id(project_id) and
-            validate_id(epic_id, 'epic') and
             validate_id(task_id, 'task') and
             validate_id(subtask_id, 'subtask')):
         raise Http404("Invalid IDs")
+    
+    # Validate epic_id if provided
+    if epic_id is not None and not validate_id(epic_id, 'epic'):
+        raise Http404("Invalid epic ID")
 
-    subtask_path = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks', f'{subtask_id}.md')
+    # Determine epic_id from metadata if not provided
+    if epic_id is None:
+        epic_id = metadata.get('epic_id')
+    
     # Ensure relationship IDs are in metadata
     if 'project_id' not in metadata:
         metadata['project_id'] = project_id
-    if 'epic_id' not in metadata:
-        metadata['epic_id'] = epic_id
+    if epic_id:
+        if 'epic_id' not in metadata:
+            metadata['epic_id'] = epic_id
+    else:
+        metadata.pop('epic_id', None)
     if 'task_id' not in metadata:
         metadata['task_id'] = task_id
-    sync_manager.save_entity_with_sync(subtask_path, subtask_id, 'subtask', metadata, content)
+    
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=subtask_id,
+        entity_type='subtask',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
     update_project_stats(project_id)
 
 
 def compute_project_stats(project_id):
     """Compute project overview stats for list view."""
-    epics_count = 0
-    tasks_count = 0
-    done_tasks_count = 0
-    subtasks_count = 0
-    done_subtasks_count = 0
-
-    epics_dir = safe_join_path('projects', project_id, 'epics')
-    if os.path.exists(epics_dir):
-        epic_filenames = [f for f in os.listdir(epics_dir) if f.endswith('.md')]
-        epics_count = len(epic_filenames)
-        for e_filename in epic_filenames:
-            epic_id = e_filename[:-3]
-            tasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks')
-            if os.path.exists(tasks_dir):
-                task_filenames = [f for f in os.listdir(tasks_dir) if f.endswith('.md')]
-                tasks_count += len(task_filenames)
-                for t_filename in task_filenames:
-                    task_id = t_filename[:-3]
-                    t_metadata, _ = load_task(project_id, epic_id, task_id, metadata_only=True)
-                    if t_metadata:
-                        if t_metadata.get('status') == 'done':
-                            done_tasks_count += 1
-
-                        subtasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                        if os.path.exists(subtasks_dir):
-                            subtask_filenames = [f for f in os.listdir(subtasks_dir) if f.endswith('.md')]
-                            subtasks_count += len(subtask_filenames)
-                            for s_filename in subtask_filenames:
-                                subtask_id = s_filename[:-3]
-                                s_metadata, _ = load_subtask(project_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                if s_metadata and s_metadata.get('status') == 'done':
-                                    done_subtasks_count += 1
+    # Count epics
+    epics_count = Entity.objects.filter(type='epic', project_id=project_id).count()
+    
+    # Count tasks (with and without epic)
+    tasks = Entity.objects.filter(type='task', project_id=project_id)
+    tasks_count = tasks.count()
+    done_tasks_count = tasks.filter(status='done').count()
+    
+    # Count subtasks
+    subtasks = Entity.objects.filter(type='subtask', project_id=project_id)
+    subtasks_count = subtasks.count()
+    done_subtasks_count = subtasks.filter(status='done').count()
 
     completion_percentage = int((done_tasks_count / tasks_count) * 100) if tasks_count > 0 else 0
 
@@ -978,21 +997,19 @@ def ensure_inbox_project():
         save_project(INBOX_PROJECT_ID, metadata, 'Inbox for quick capture. File items here for later organization.')
     
     # Ensure inbox has a default epic for tasks
-    epics_dir = safe_join_path('projects', INBOX_PROJECT_ID, 'epics')
-    if os.path.exists(epics_dir):
-        epic_files = [f for f in os.listdir(epics_dir) if f.endswith('.md')]
-        if not epic_files:
-            # Create default inbox epic
-            inbox_epic_id = f'epic-{uuid.uuid4().hex[:8]}'
-            seq_id = get_next_seq_id(INBOX_PROJECT_ID, 'epic')
-            epic_metadata = {
-                'title': 'Inbox',
-                'status': 'active',
-                'seq_id': seq_id,
-                'created': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
-                'is_inbox_epic': True
-            }
-            save_epic(INBOX_PROJECT_ID, inbox_epic_id, epic_metadata, 'Default epic for inbox tasks.')
+    epics = Entity.objects.filter(type='epic', project_id=INBOX_PROJECT_ID)
+    if not epics.exists():
+        # Create default inbox epic
+        inbox_epic_id = f'epic-{uuid.uuid4().hex[:8]}'
+        seq_id = get_next_seq_id(INBOX_PROJECT_ID, 'epic')
+        epic_metadata = {
+            'title': 'Inbox',
+            'status': 'active',
+            'seq_id': seq_id,
+            'created': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+            'is_inbox_epic': True
+        }
+        save_epic(INBOX_PROJECT_ID, inbox_epic_id, epic_metadata, 'Default epic for inbox tasks.')
     
     return INBOX_PROJECT_ID
 
@@ -1000,18 +1017,18 @@ def ensure_inbox_project():
 def get_inbox_epic():
     """Get the default inbox epic ID. Creates it if it does not exist."""
     ensure_inbox_project()
-    epics_dir = safe_join_path('projects', INBOX_PROJECT_ID, 'epics')
-    if os.path.exists(epics_dir):
-        for epic_file in os.listdir(epics_dir):
-            if epic_file.endswith('.md'):
-                epic_id = epic_file[:-3]
-                epic_meta, _ = load_epic(INBOX_PROJECT_ID, epic_id, metadata_only=True)
-                if epic_meta and epic_meta.get('is_inbox_epic'):
-                    return epic_id
-                # If no inbox epic found, use the first one
-                if not os.path.exists(safe_join_path('projects', INBOX_PROJECT_ID, 'epics', f'{epic_id}.md')):
-                    continue
-                return epic_id
+    
+    # Query for inbox epic
+    epics = Entity.objects.filter(type='epic', project_id=INBOX_PROJECT_ID)
+    for epic in epics:
+        if epic.is_inbox_epic:
+            return epic.id
+    
+    # If no inbox epic found, use the first one
+    first_epic = epics.first()
+    if first_epic:
+        return first_epic.id
+    
     # If no epic exists, create one
     inbox_epic_id = f'epic-{uuid.uuid4().hex[:8]}'
     seq_id = get_next_seq_id(INBOX_PROJECT_ID, 'epic')
@@ -1028,49 +1045,39 @@ def get_inbox_epic():
 
 def project_list(request):
     """Display list of all projects."""
-    projects_dir = safe_join_path('projects')
-    os.makedirs(projects_dir, exist_ok=True)
-    
     show_archived = request.GET.get('archived', 'false') == 'true'
 
     projects = []
-    try:
-        filenames = [f for f in os.listdir(projects_dir) if f.endswith('.md')]
-        for filename in filenames:
-            project_id = filename[:-3]
-            # Skip inbox project - it is shown separately
-            if project_id == INBOX_PROJECT_ID:
-                continue
-            metadata, _ = load_project(project_id, metadata_only=True)
-            if metadata is not None:
-                is_archived = metadata.get('archived', False)
-                if (show_archived and not is_archived) or (not show_archived and is_archived):
-                    continue
-                
-                stats = metadata.get('stats', {})
-                if metadata.get('stats_version') != STATS_VERSION or not stats:
-                    stats = compute_project_stats(project_id)
-                    full_metadata, content = load_project(project_id, metadata_only=False)
-                    if full_metadata is not None:
-                        full_metadata['stats'] = stats
-                        full_metadata['stats_version'] = STATS_VERSION
-                        full_metadata['stats_updated'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-                        save_project(project_id, full_metadata, content)
+    project_entities = Entity.objects.select_related('status_fk').filter(type='project').exclude(id=INBOX_PROJECT_ID)
+    
+    for entity in project_entities:
+        is_archived = entity.archived
+        if (show_archived and not is_archived) or (not show_archived and is_archived):
+            continue
+        
+        stats = entity.stats or {}
+        if entity.stats_version != STATS_VERSION or not stats:
+            stats = compute_project_stats(entity.id)
+            metadata = _build_metadata_from_entity(entity)
+            metadata['stats'] = stats
+            metadata['stats_version'] = STATS_VERSION
+            metadata['stats_updated'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            save_project(entity.id, metadata, entity.content)
 
-                projects.append({
-                    'id': project_id,
-                    'title': metadata.get('title', 'Untitled Project'),
-                    'status': metadata.get('status', 'active'),
-                    'archived': is_archived,
-                    'epics_count': stats.get('epics_count', 0),
-                    'tasks_count': stats.get('tasks_count', 0),
-                    'done_tasks_count': stats.get('done_tasks_count', 0),
-                    'subtasks_count': stats.get('subtasks_count', 0),
-                    'done_subtasks_count': stats.get('done_subtasks_count', 0),
-                    'completion_percentage': stats.get('completion_percentage', 0)
-                })
-    except OSError as e:
-        logger.error(f"Error reading projects directory: {e}")
+        status_name = entity.status or 'active'
+        projects.append({
+            'id': entity.id,
+            'title': entity.title or 'Untitled Project',
+            'status': status_name,
+            'status_display': entity.status_fk.display_name if entity.status_fk else _status_display_fallback(status_name or entity.status),
+            'archived': is_archived,
+            'epics_count': stats.get('epics_count', 0),
+            'tasks_count': stats.get('tasks_count', 0),
+            'done_tasks_count': stats.get('done_tasks_count', 0),
+            'subtasks_count': stats.get('subtasks_count', 0),
+            'done_subtasks_count': stats.get('done_subtasks_count', 0),
+            'completion_percentage': stats.get('completion_percentage', 0)
+        })
 
     return render(request, 'pm/project_list.html', {
         'projects': projects,
@@ -1128,131 +1135,165 @@ def project_detail(request, project):
         save_project(project, metadata, content)
         return redirect('project_detail', project=project)
 
+    # Handle description update
+    if request.method == 'POST' and 'quick_update' in request.POST:
+        quick_update = request.POST.get('quick_update')
+        if quick_update == 'description':
+            new_content = request.POST.get('description', '').strip()
+            content = new_content
+            # Extract @mentions from description content
+            mentions = extract_mentions(new_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            save_project(project, metadata, content)
+            # Return JSON for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                rendered = render_markdown(new_content)
+                return JsonResponse({
+                    'success': True,
+                    'content': rendered
+                })
+            return redirect('project_detail', project=project)
+
     # Calculate project-level progress
     _, markdown_total, markdown_progress = calculate_markdown_progress(content)
     _, checklist_total, checklist_progress = calculate_checklist_progress(metadata)
 
-    # Load epics and their tasks in a single pass
-    epics_dir = safe_join_path('projects', project, 'epics')
+    # Load epics and their tasks
     epics = []
     archived_epics = []
     open_epics = []
 
-    if os.path.exists(epics_dir):
-        try:
-            # Get list of epic files once - filter out directories
-            all_items = os.listdir(epics_dir)
-            epic_filenames = [f for f in all_items if f.endswith('.md') and os.path.isfile(os.path.join(epics_dir, f))]
+    epic_entities = Entity.objects.select_related('status_fk').filter(type='epic', project_id=project).prefetch_related('labels')
+    for epic_entity in epic_entities:
+        epic_metadata = _build_metadata_from_entity(epic_entity)
+        
+        is_archived = epic_entity.archived if hasattr(epic_entity, 'archived') else epic_metadata.get('archived', False)
+
+        # Load tasks for this epic
+        tasks = []
+        open_tasks = []
+        
+        task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic_entity.id).prefetch_related('labels')
+        for task_entity in task_entities:
+            task_metadata = _build_metadata_from_entity(task_entity)
             
-            for filename in epic_filenames:
-                epic_id = filename[:-3]
-                try:
-                    # Epics in project_detail only need metadata
-                    epic_metadata, _ = load_epic(project, epic_id, metadata_only=True)
-                    if epic_metadata is None:
-                        logger.warning(f"Could not load epic {epic_id} in project {project}")
-                        continue
+            status_name = task_entity.status or task_metadata.get('status', 'todo')
+            task_data = {
+                'id': task_entity.id,
+                'title': task_entity.title or task_metadata.get('title', 'Untitled Task'),
+                'status': status_name,
+                'status_display': task_entity.status_fk.display_name if task_entity.status_fk else _status_display_fallback(status_name or task_entity.status),
+                'schedule_start': task_entity.schedule_start or task_metadata.get('schedule_start', ''),
+                'schedule_end': task_entity.schedule_end or task_metadata.get('schedule_end', '')
+            }
+            tasks.append(task_data)
+            
+            # Check if it is an open task
+            if task_data['status'] in ['todo', 'in_progress']:
+                # Load subtasks for open tasks
+                open_subtasks = []
+                subtask_entities = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id=epic_entity.id).prefetch_related('labels')
+                for subtask_entity in subtask_entities:
+                    subtask_metadata = _build_metadata_from_entity(subtask_entity)
                     
-                    is_archived = epic_metadata.get('archived', False)
+                    subtask_status = subtask_entity.status or subtask_metadata.get('status', 'todo')
+                    if subtask_status in ['todo', 'in_progress']:
+                        open_subtasks.append({
+                            'id': subtask_entity.id,
+                            'title': subtask_entity.title or subtask_metadata.get('title', 'Untitled Subtask'),
+                            'status': subtask_status,
+                            'status_display': subtask_entity.status_fk.display_name if subtask_entity.status_fk else _status_display_fallback(subtask_status or subtask_entity.status)
+                        })
+                
+                open_task_data = task_data.copy()
+                open_task_data['subtasks'] = open_subtasks
+                open_tasks.append(open_task_data)
 
-                    # Load tasks for this epic
-                    tasks_dir = safe_join_path('projects', project, 'epics', epic_id, 'tasks')
-                    tasks = []
-                    open_tasks = []
-                    
-                    if os.path.exists(tasks_dir):
-                        try:
-                            task_filenames = [f for f in os.listdir(tasks_dir) if f.endswith('.md') and os.path.isfile(os.path.join(tasks_dir, f))]
-                            for task_filename in task_filenames:
-                                task_id = task_filename[:-3]
-                                try:
-                                    # Tasks in project_detail only need metadata
-                                    task_metadata, _ = load_task(project, epic_id, task_id, metadata_only=True)
-                                    if task_metadata is None:
-                                        continue
-                                    
-                                    task_data = {
-                                        'id': task_id,
-                                        'title': task_metadata.get('title', 'Untitled Task'),
-                                        'status': task_metadata.get('status', 'todo'),
-                                        'schedule_start': task_metadata.get('schedule_start', ''),
-                                        'schedule_end': task_metadata.get('schedule_end', '')
-                                    }
-                                    tasks.append(task_data)
-                                    
-                                    # Check if it is an open task
-                                    if task_data['status'] in ['todo', 'in_progress']:
-                                        # Only load subtasks for open tasks if needed for the "Open Work" view
-                                        subtasks_dir = safe_join_path('projects', project, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                                        open_subtasks = []
-                                        if os.path.exists(subtasks_dir):
-                                            try:
-                                                subtask_filenames = [f for f in os.listdir(subtasks_dir) if f.endswith('.md') and os.path.isfile(os.path.join(subtasks_dir, f))]
-                                                for subtask_filename in subtask_filenames:
-                                                    subtask_id = subtask_filename[:-3]
-                                                    try:
-                                                        # Subtasks in project_detail only need metadata
-                                                        subtask_metadata, _ = load_subtask(project, epic_id, task_id, subtask_id, metadata_only=True)
-                                                        if subtask_metadata and subtask_metadata.get('status') in ['todo', 'in_progress']:
-                                                            open_subtasks.append({
-                                                                'id': subtask_id,
-                                                                'title': subtask_metadata.get('title', 'Untitled Subtask'),
-                                                                'status': subtask_metadata.get('status', 'todo')
-                                                            })
-                                                    except Exception as e:
-                                                        logger.warning(f"Error loading subtask {subtask_id}: {e}")
-                                                        continue
-                                            except OSError as e:
-                                                logger.warning(f"Error reading subtasks directory for task {task_id}: {e}")
-                                        
-                                        open_task_data = task_data.copy()
-                                        open_task_data['subtasks'] = open_subtasks
-                                        open_tasks.append(open_task_data)
-                                except Exception as e:
-                                    logger.warning(f"Error loading task {task_id} in epic {epic_id}: {e}")
-                                    continue
-                        except OSError as e:
-                            logger.warning(f"Error reading tasks directory for epic {epic_id}: {e}")
+        # Calculate progress
+        total_tasks_count = len(tasks)
+        completed_tasks_count = sum(1 for t in tasks if t['status'] == 'done')
+        progress_pct = (completed_tasks_count / total_tasks_count * 100) if total_tasks_count > 0 else 0
 
-                    # Calculate progress
-                    total_tasks_count = len(tasks)
-                    completed_tasks_count = sum(1 for t in tasks if t['status'] == 'done')
-                    progress_pct = (completed_tasks_count / total_tasks_count * 100) if total_tasks_count > 0 else 0
+        epic_status = epic_entity.status or epic_metadata.get('status', 'active')
+        epic_data = {
+            'id': epic_entity.id,
+            'title': epic_entity.title or epic_metadata.get('title', 'Untitled Epic'),
+            'status': epic_status,
+            'status_display': epic_entity.status_fk.display_name if epic_entity.status_fk else _status_display_fallback(epic_status or epic_entity.status),
+            'seq_id': epic_entity.seq_id or epic_metadata.get('seq_id', ''),
+            'tasks': tasks,
+            'completed_tasks': completed_tasks_count,
+            'total_tasks': total_tasks_count,
+            'progress_percentage': progress_pct,
+            'archived': is_archived
+        }
+        
+        if is_archived:
+            archived_epics.append(epic_data)
+        else:
+            epics.append(epic_data)
+            # If epic is active, add to open_epics
+            if epic_data['status'] == 'active':
+                open_epic_data = epic_data.copy()
+                open_epic_data['tasks'] = open_tasks
+                open_epics.append(open_epic_data)
 
-                    epic_data = {
-                        'id': epic_id,
-                        'title': epic_metadata.get('title', 'Untitled Epic'),
-                        'status': epic_metadata.get('status', 'active'),
-                        'seq_id': epic_metadata.get('seq_id', ''),
-                        'tasks': tasks,
-                        'completed_tasks': completed_tasks_count,
-                        'total_tasks': total_tasks_count,
-                        'progress_percentage': progress_pct,
-                        'archived': is_archived
-                    }
-                    
-                    if is_archived:
-                        archived_epics.append(epic_data)
-                    else:
-                        epics.append(epic_data)
-                        # If epic is active, add to open_epics
-                        if epic_data['status'] == 'active':
-                            open_epic_data = epic_data.copy()
-                            open_epic_data['tasks'] = open_tasks
-                            open_epics.append(open_epic_data)
-                except Exception as e:
-                    logger.error(f"Error processing epic {epic_id} in project {project}: {e}")
-                    continue
-                    
-            # Sort epics by seq_id, then by title
-            epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
-            archived_epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
-            open_epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
-                    
-        except OSError as e:
-            logger.error(f"Error reading epics directory: {e}")
+    # Sort epics by seq_id, then by title
+    epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
+    archived_epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
+    open_epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
 
-    edit_mode = request.GET.get('edit', 'false') == 'true'
+    # Load tasks directly under project (without epic)
+    direct_tasks = []
+    direct_open_tasks = []
+    
+    direct_task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id__isnull=True).prefetch_related('labels')
+    for task_entity in direct_task_entities:
+        task_metadata = _build_metadata_from_entity(task_entity)
+        
+        task_status = task_entity.status or task_metadata.get('status', 'todo')
+        task_data = {
+            'id': task_entity.id,
+            'title': task_entity.title or task_metadata.get('title', 'Untitled Task'),
+            'status': task_status,
+            'status_display': task_entity.status_fk.display_name if task_entity.status_fk else _status_display_fallback(task_status or task_entity.status),
+            'seq_id': task_entity.seq_id or task_metadata.get('seq_id', ''),
+            'priority': task_entity.priority or task_metadata.get('priority', ''),
+            'created': task_entity.created or task_metadata.get('created', ''),
+            'due_date': task_entity.due_date or task_metadata.get('due_date', ''),
+            'schedule_start': task_entity.schedule_start or task_metadata.get('schedule_start', ''),
+            'schedule_end': task_entity.schedule_end or task_metadata.get('schedule_end', ''),
+            'epic_id': None  # Mark as direct task
+        }
+        direct_tasks.append(task_data)
+        
+        # Check if it is an open task
+        if task_data['status'] in ['todo', 'in_progress']:
+            open_subtasks = []
+            subtask_entities = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id__isnull=True).prefetch_related('labels')
+            for subtask_entity in subtask_entities:
+                subtask_metadata = _build_metadata_from_entity(subtask_entity)
+                
+                subtask_status = subtask_entity.status or subtask_metadata.get('status', 'todo')
+                if subtask_status in ['todo', 'in_progress']:
+                    open_subtasks.append({
+                        'id': subtask_entity.id,
+                        'title': subtask_entity.title or subtask_metadata.get('title', 'Untitled Subtask'),
+                        'status': subtask_status,
+                        'status_display': subtask_entity.status_fk.display_name if subtask_entity.status_fk else _status_display_fallback(subtask_status or subtask_entity.status)
+                    })
+            
+            open_task_data = task_data.copy()
+            open_task_data['subtasks'] = open_subtasks
+            direct_open_tasks.append(open_task_data)
 
     # Handle archive/unarchive
     if request.method == 'POST' and 'archive' in request.POST:
@@ -1265,21 +1306,6 @@ def project_detail(request, project):
         save_project(project, metadata, content)
         return redirect('project_detail', project=project)
 
-    if request.method == 'POST':
-        # Handle form submission for editing
-        metadata['title'] = request.POST.get('title', metadata['title'])
-        metadata['status'] = request.POST.get('status', metadata['status'])
-        color = request.POST.get('color', '').strip()
-        if color:
-            metadata['color'] = color
-        elif 'color' not in metadata:
-            metadata['color'] = get_project_color(project)
-        content = request.POST.get('content', content)
-
-        save_project(project, metadata, content)
-
-        return redirect('project_detail', project=project)
-
     activity = get_project_activity(project)
 
     return render(request, 'pm/project_detail.html', {
@@ -1289,8 +1315,9 @@ def project_detail(request, project):
         'epics': epics,
         'archived_epics': archived_epics,
         'open_epics': open_epics,
+        'direct_tasks': direct_tasks,
+        'direct_open_tasks': direct_open_tasks,
         'activity': activity,
-        'edit_mode': edit_mode,
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
@@ -1375,27 +1402,22 @@ def epic_detail(request, project, epic):
     _, checklist_total, checklist_progress = calculate_checklist_progress(metadata)
 
     # Load tasks
-    tasks_dir = safe_join_path('projects', project, 'epics', epic, 'tasks')
+    task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic).prefetch_related('labels')
     tasks = []
-    if os.path.exists(tasks_dir):
-        try:
-            for filename in os.listdir(tasks_dir):
-                if filename.endswith('.md'):
-                    task_id = filename[:-3]
-                    task_metadata, _ = load_task(project, epic, task_id)
-                    if task_metadata is not None:
-                        tasks.append({
-                            'id': task_id,
-                            'title': task_metadata.get('title', 'Untitled Task'),
-                            'status': task_metadata.get('status', 'todo'),
-                            'seq_id': task_metadata.get('seq_id', ''),
-                            'priority': task_metadata.get('priority', ''),
-                            'created': task_metadata.get('created', ''),
-                            'due_date': task_metadata.get('due_date', ''),
-                            'order': task_metadata.get('order', 0)
-                        })
-        except OSError as e:
-            logger.error(f"Error reading tasks directory: {e}")
+    for entity in task_entities:
+        task_metadata = _build_metadata_from_entity(entity)
+        task_status = entity.status or task_metadata.get('status', 'todo')
+        tasks.append({
+            'id': entity.id,
+            'title': entity.title or task_metadata.get('title', 'Untitled Task'),
+            'status': task_status,
+            'status_display': entity.status_fk.display_name if entity.status_fk else _status_display_fallback(task_status or entity.status),
+            'seq_id': entity.seq_id or task_metadata.get('seq_id', ''),
+            'priority': entity.priority or task_metadata.get('priority', ''),
+            'created': entity.created or task_metadata.get('created', ''),
+            'due_date': entity.due_date or task_metadata.get('due_date', ''),
+            'order': task_metadata.get('order', 0)
+        })
 
     tasks.sort(key=lambda t: (t.get('order', 0), t.get('title', '')))
 
@@ -1403,8 +1425,6 @@ def epic_detail(request, project, epic):
     total_tasks = len(tasks)
     completed_tasks = sum(1 for task in tasks if task['status'] == 'done')
     progress_percentage = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
-
-    edit_mode = request.GET.get('edit', 'false') == 'true'
 
     # Handle quick updates (status, priority, labels, people, dates)
     if request.method == 'POST' and 'quick_update' in request.POST:
@@ -1460,13 +1480,14 @@ def epic_detail(request, project, epic):
         elif quick_update == 'add_person':
             person = request.POST.get('person', '').strip()
             if person:
+                # Ensure person exists (create if needed)
+                person_normalized = ensure_person_exists(person)
                 people_list = normalize_people(metadata.get('people', []))
-                if person not in people_list:
-                    people_list.append(person)
+                if person_normalized not in people_list:
+                    people_list.append(person_normalized)
                     metadata['people'] = people_list
-                    add_activity_entry(metadata, 'person_added', None, person)
+                    add_activity_entry(metadata, 'person_added', None, person_normalized)
                     save_epic(project, epic, metadata, content)
-                    cache.delete("all_people:v1")  # Invalidate cache
             return redirect('epic_detail', project=project, epic=epic)
         elif quick_update == 'remove_person':
             person = request.POST.get('person', '').strip()
@@ -1503,22 +1524,29 @@ def epic_detail(request, project, epic):
                     add_activity_entry(metadata, 'note_unlinked', note_title, None)
                     save_epic(project, epic, metadata, content)
             return redirect('epic_detail', project=project, epic=epic)
-
-    if request.method == 'POST':
-        # Handle form submission for editing
-        metadata['title'] = request.POST.get('title', metadata['title'])
-        metadata['status'] = request.POST.get('status', metadata['status'])
-        metadata['due_date'] = request.POST.get('due_date', metadata.get('due_date', ''))
-        priority = request.POST.get('priority', '').strip()
-        if priority:
-            metadata['priority'] = priority
-        else:
-            metadata.pop('priority', None)
-        content = request.POST.get('content', content)
-
-        save_epic(project, epic, metadata, content)
-
-        return redirect('epic_detail', project=project, epic=epic)
+        elif quick_update == 'description':
+            new_content = request.POST.get('description', '').strip()
+            content = new_content
+            # Extract @mentions from description content
+            mentions = extract_mentions(new_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            save_epic(project, epic, metadata, content)
+            # Return JSON for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                rendered = render_markdown(new_content)
+                return JsonResponse({
+                    'success': True,
+                    'content': rendered
+                })
+            return redirect('epic_detail', project=project, epic=epic)
 
     # Prepare labels with colors
     labels_list = normalize_labels(metadata.get('labels', []))
@@ -1602,7 +1630,6 @@ def epic_detail(request, project, epic):
         'completed_tasks': completed_tasks,
         'total_tasks': total_tasks,
         'progress_percentage': progress_percentage,
-        'edit_mode': edit_mode,
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
@@ -1619,8 +1646,8 @@ def epic_detail(request, project, epic):
     })
 
 
-def new_task(request, project, epic):
-    """Create a new task."""
+def new_task(request, project, epic=None):
+    """Create a new task. Epic is optional."""
     if request.method == 'POST':
         title = request.POST.get('title', 'New Task')
         status = request.POST.get('status', 'todo')
@@ -1648,10 +1675,14 @@ def new_task(request, project, epic):
 
         # Add creation activity
         add_activity_entry(metadata, 'created')
-        save_task(project, epic, task_id, metadata, content)
+        save_task(project, task_id, metadata, content, epic_id=epic)
 
         # Return JSON for AJAX requests
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            if epic:
+                url = reverse('task_detail', kwargs={'project': project, 'epic': epic, 'task': task_id})
+            else:
+                url = reverse('task_detail_no_epic', kwargs={'project': project, 'task': task_id})
             return JsonResponse({
                 'success': True,
                 'id': task_id,
@@ -1661,16 +1692,21 @@ def new_task(request, project, epic):
                 'priority': priority,
                 'created': metadata.get('created', ''),
                 'due_date': metadata.get('due_date', ''),
-                'url': reverse('task_detail', kwargs={'project': project, 'epic': epic, 'task': task_id})
+                'url': url
             })
 
-        return redirect('task_detail', project=project, epic=epic, task=task_id)
+        if epic:
+            return redirect('task_detail', project=project, epic=epic, task=task_id)
+        else:
+            return redirect('task_detail_no_epic', project=project, task=task_id)
 
     # Load parent metadata for breadcrumbs
     project_metadata, _ = load_project(project, metadata_only=True)
-    epic_metadata, _ = load_epic(project, epic, metadata_only=True)
     project_title = project_metadata.get('title', 'Untitled Project') if project_metadata else project
-    epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    epic_title = None
+    if epic:
+        epic_metadata, _ = load_epic(project, epic, metadata_only=True)
+        epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
 
     return render(request, 'pm/new_task.html', {
         'project': project,
@@ -1680,25 +1716,45 @@ def new_task(request, project, epic):
     })
 
 
-def task_detail(request, project, epic, task):
-    """Display task details with subtasks and updates."""
-    metadata, content = load_task(project, epic, task)
+def _task_detail_impl(request, project, task, epic=None):
+    """Display task details with subtasks and updates. Epic is optional."""
+    # Get epic from metadata if not provided
+    if epic is None:
+        # Try to load task to get epic from metadata
+        temp_metadata, _ = load_task(project, task, epic_id=None)
+        if temp_metadata:
+            epic = temp_metadata.get('epic_id')
+    
+    metadata, content = load_task(project, task, epic_id=epic)
     if metadata is None:
         raise Http404("Task not found")
+    
+    # Ensure epic matches metadata (in case it changed)
+    epic = metadata.get('epic_id') or epic
 
     # Load parent metadata for breadcrumbs
     project_metadata, _ = load_project(project, metadata_only=True)
-    epic_metadata, _ = load_epic(project, epic, metadata_only=True)
     project_title = project_metadata.get('title', 'Untitled Project') if project_metadata else project
-    epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    epic_title = None
+    epic_metadata = None
+    if epic:
+        epic_metadata, _ = load_epic(project, epic, metadata_only=True)
+        epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
     
     # Check if this task is in the inbox epic
     is_inbox_task = (project == INBOX_PROJECT_ID and epic_metadata and epic_metadata.get('is_inbox_epic', False))
+    
+    # Helper function for redirects
+    def get_task_redirect_url():
+        if epic:
+            return redirect('task_detail', project=project, epic=epic, task=task)
+        else:
+            return redirect('task_detail_no_epic', project=project, task=task)
 
     # Handle checklist operations
     if request.method == 'POST' and handle_checklist_post(request, metadata):
-        save_task(project, epic, task, metadata, content)
-        return redirect('task_detail', project=project, epic=epic, task=task)
+        save_task(project, task, metadata, content, epic_id=epic)
+        return get_task_redirect_url()
 
     # Calculate progress
     _, markdown_total, markdown_progress = calculate_markdown_progress(content)
@@ -1717,7 +1773,7 @@ def task_detail(request, project, epic, task):
             'created': datetime.now().strftime('%Y-%m-%d')
         }
 
-        save_subtask(project, epic, task, subtask_id, subtask_metadata, subtask_content)
+        save_subtask(project, task, subtask_id, subtask_metadata, subtask_content, epic_id=epic)
 
         # Handle AJAX requests
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
@@ -1736,6 +1792,18 @@ def task_detail(request, project, epic, task):
     if request.method == 'POST' and 'update_content' in request.POST:
         update_content = request.POST.get('update_content', '').strip()
         if update_content:
+            # Extract @mentions from update content
+            mentions = extract_mentions(update_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            
             # Add new update to metadata
             if 'updates' not in metadata:
                 metadata['updates'] = []
@@ -1746,7 +1814,7 @@ def task_detail(request, project, epic, task):
                 'type': 'user'
             })
 
-            save_task(project, epic, task, metadata, content)
+            save_task(project, task, metadata, content, epic_id=epic)
 
         return redirect('task_detail', project=project, epic=epic, task=task)
 
@@ -1767,31 +1835,26 @@ def task_detail(request, project, epic, task):
     updates.sort(key=lambda x: x['timestamp'] if isinstance(x['timestamp'], datetime) else str(x['timestamp']), reverse=True)
 
     # Load subtasks
-    subtasks_dir = safe_join_path('projects', project, 'epics', epic, 'tasks', task, 'subtasks')
     subtasks = []
-    if os.path.exists(subtasks_dir):
-        try:
-            for filename in os.listdir(subtasks_dir):
-                if filename.endswith('.md'):
-                    subtask_id = filename[:-3]
-                    subtask_metadata, _ = load_subtask(project, epic, task, subtask_id)
-                    if subtask_metadata is not None:
-                        subtasks.append({
-                            'id': subtask_id,
-                            'seq_id': subtask_metadata.get('seq_id', ''),
-                            'title': subtask_metadata.get('title', 'Untitled Subtask'),
-                            'status': subtask_metadata.get('status', 'todo'),
-                            'priority': subtask_metadata.get('priority', ''),
-                            'created': subtask_metadata.get('created', ''),
-                            'due_date': subtask_metadata.get('due_date', ''),
-                            'order': subtask_metadata.get('order', 0)
-                        })
-        except OSError as e:
-            logger.error(f"Error reading subtasks directory: {e}")
+    subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task)
+    if epic:
+        subtask_entities = subtask_entities.filter(epic_id=epic)
+    else:
+        subtask_entities = subtask_entities.filter(epic_id__isnull=True)
+    
+    for entity in subtask_entities:
+        subtasks.append({
+            'id': entity.id,
+            'seq_id': entity.seq_id or '',
+            'title': entity.title or 'Untitled Subtask',
+            'status': entity.status or 'todo',
+            'priority': entity.priority or '',
+            'created': entity.created or '',
+            'due_date': entity.due_date or '',
+            'order': 0  # Order field not in Entity model, default to 0
+        })
 
     subtasks.sort(key=lambda s: (s.get('order', 0), s.get('title', '')))
-
-    edit_mode = request.GET.get('edit', 'false') == 'true'
 
     # Handle dependency operations
     if request.method == 'POST' and 'add_block' in request.POST:
@@ -1807,8 +1870,8 @@ def task_detail(request, project, epic, task):
                 add_activity_entry(metadata, 'dependency_added', None, f"blocks {task_title}")
                 # Update reciprocal: target should be blocked_by this task
                 update_reciprocal_dependency(project, task, block_id, 'blocks', 'add')
-            save_task(project, epic, task, metadata, content)
-        return redirect('task_detail', project=project, epic=epic, task=task)
+            save_task(project, task, metadata, content, epic_id=epic)
+        return get_task_redirect_url()
     
     if request.method == 'POST' and 'remove_block' in request.POST:
         block_id = request.POST.get('remove_block', '').strip()
@@ -1820,8 +1883,8 @@ def task_detail(request, project, epic, task):
             add_activity_entry(metadata, 'dependency_removed', f"blocks {task_title}", None)
             # Update reciprocal: remove blocked_by from target
             update_reciprocal_dependency(project, task, block_id, 'blocks', 'remove')
-            save_task(project, epic, task, metadata, content)
-        return redirect('task_detail', project=project, epic=epic, task=task)
+            save_task(project, task, metadata, content, epic_id=epic)
+        return get_task_redirect_url()
     
     if request.method == 'POST' and 'add_blocked_by' in request.POST:
         blocked_by_id = request.POST.get('add_blocked_by', '').strip()
@@ -1836,8 +1899,8 @@ def task_detail(request, project, epic, task):
                 add_activity_entry(metadata, 'dependency_added', None, f"blocked by {task_title}")
                 # Update reciprocal: target should block this task
                 update_reciprocal_dependency(project, task, blocked_by_id, 'blocked_by', 'add')
-            save_task(project, epic, task, metadata, content)
-        return redirect('task_detail', project=project, epic=epic, task=task)
+            save_task(project, task, metadata, content, epic_id=epic)
+        return get_task_redirect_url()
     
     if request.method == 'POST' and 'remove_blocked_by' in request.POST:
         blocked_by_id = request.POST.get('remove_blocked_by', '').strip()
@@ -1849,8 +1912,8 @@ def task_detail(request, project, epic, task):
             add_activity_entry(metadata, 'dependency_removed', f"blocked by {task_title}", None)
             # Update reciprocal: remove blocks from target
             update_reciprocal_dependency(project, task, blocked_by_id, 'blocked_by', 'remove')
-            save_task(project, epic, task, metadata, content)
-        return redirect('task_detail', project=project, epic=epic, task=task)
+            save_task(project, task, metadata, content, epic_id=epic)
+        return get_task_redirect_url()
 
     # Handle quick updates (status, priority, schedule)
     if request.method == 'POST' and 'quick_update' in request.POST:
@@ -1861,8 +1924,8 @@ def task_detail(request, project, epic, task):
             if old_status != new_status:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
-                save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'priority':
             old_priority = metadata.get('priority', '')
             priority = request.POST.get('priority', '').strip()
@@ -1872,32 +1935,32 @@ def task_detail(request, project, epic, task):
                 else:
                     metadata.pop('priority', None)
                 add_activity_entry(metadata, 'priority_changed', old_priority, priority)
-                save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'schedule_start':
             old_start = metadata.get('schedule_start', '')
             new_start = request.POST.get('schedule_start', '')
             if old_start != new_start:
                 metadata['schedule_start'] = new_start
                 add_activity_entry(metadata, 'schedule_start_changed', old_start, new_start)
-                save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'schedule_end':
             old_end = metadata.get('schedule_end', '')
             new_end = request.POST.get('schedule_end', '')
             if old_end != new_end:
                 metadata['schedule_end'] = new_end
                 add_activity_entry(metadata, 'schedule_end_changed', old_end, new_end)
-                save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'due_date':
             old_due = metadata.get('due_date', '')
             new_due = request.POST.get('due_date', '')
             if old_due != new_due:
                 metadata['due_date'] = new_due
                 add_activity_entry(metadata, 'due_date_changed', old_due, new_due)
-                save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'add_label':
             label = request.POST.get('label', '').strip()
             if label:
@@ -1906,9 +1969,9 @@ def task_detail(request, project, epic, task):
                     current_labels.append(label)
                     metadata['labels'] = current_labels
                     add_activity_entry(metadata, 'label_added', None, label)
-                    save_task(project, epic, task, metadata, content)
+                    save_task(project, task, metadata, content, epic_id=epic)
                     cache.delete("all_labels:v1")  # Invalidate cache
-            return redirect('task_detail', project=project, epic=epic, task=task)
+            return get_task_redirect_url()
         elif quick_update == 'remove_label':
             label = request.POST.get('label', '').strip()
             if label:
@@ -1916,19 +1979,20 @@ def task_detail(request, project, epic, task):
                 if label in current_labels:
                     metadata['labels'] = [l for l in current_labels if l != label]
                     add_activity_entry(metadata, 'label_removed', label, None)
-                    save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                    save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'add_person':
             person = request.POST.get('person', '').strip()
             if person:
+                # Ensure person exists (create if needed)
+                person_normalized = ensure_person_exists(person)
                 current_people = normalize_people(metadata.get('people', []))
-                if person not in current_people:
-                    current_people.append(person)
+                if person_normalized not in current_people:
+                    current_people.append(person_normalized)
                     metadata['people'] = current_people
-                    add_activity_entry(metadata, 'person_added', None, person)
-                    save_task(project, epic, task, metadata, content)
-                    cache.delete("all_people:v1")  # Invalidate cache
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                    add_activity_entry(metadata, 'person_added', None, person_normalized)
+                    save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'remove_person':
             person = request.POST.get('person', '').strip()
             if person:
@@ -1936,8 +2000,8 @@ def task_detail(request, project, epic, task):
                 if person in current_people:
                     metadata['people'] = [p for p in current_people if p != person]
                     add_activity_entry(metadata, 'person_removed', person, None)
-                    save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                    save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'add_note':
             note_id = request.POST.get('note_id', '').strip()
             if note_id:
@@ -1949,8 +2013,8 @@ def task_detail(request, project, epic, task):
                     note_meta, _ = load_note(note_id)
                     note_title = note_meta.get('title', note_id) if note_meta else note_id
                     add_activity_entry(metadata, 'note_linked', None, note_title)
-                    save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                    save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
         elif quick_update == 'remove_note':
             note_id = request.POST.get('note_id', '').strip()
             if note_id:
@@ -1961,8 +2025,31 @@ def task_detail(request, project, epic, task):
                     note_title = note_meta.get('title', note_id) if note_meta else note_id
                     metadata['notes'] = [n for n in notes_list if n != note_id]
                     add_activity_entry(metadata, 'note_unlinked', note_title, None)
-                    save_task(project, epic, task, metadata, content)
-            return redirect('task_detail', project=project, epic=epic, task=task)
+                    save_task(project, task, metadata, content, epic_id=epic)
+            return get_task_redirect_url()
+        elif quick_update == 'description':
+            new_content = request.POST.get('description', '').strip()
+            content = new_content
+            # Extract @mentions from description content
+            mentions = extract_mentions(new_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            save_task(project, task, metadata, content, epic_id=epic)
+            # Return JSON for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                rendered = render_markdown(new_content)
+                return JsonResponse({
+                    'success': True,
+                    'content': rendered
+                })
+            return get_task_redirect_url()
 
     if request.method == 'POST' and 'title' in request.POST:
         # Handle form submission for editing
@@ -1983,12 +2070,13 @@ def task_detail(request, project, epic, task):
             metadata.pop('labels', None)
         people = normalize_people(request.POST.get('people', ''))
         if people:
-            metadata['people'] = people
+            # Ensure all people exist (create if needed)
+            metadata['people'] = ensure_people_exist(people)
         else:
             metadata.pop('people', None)
         content = request.POST.get('content', content)
 
-        save_task(project, epic, task, metadata, content)
+        save_task(project, task, metadata, content, epic_id=epic)
 
         return redirect('task_detail', project=project, epic=epic, task=task)
 
@@ -2081,6 +2169,8 @@ def task_detail(request, project, epic, task):
         'metadata': metadata,
         'content': content,
         'project': project,
+        'epic': epic,
+        'epic_title': epic_title,
         'project_title': project_title,
         'epic': epic,
         'epic_title': epic_title,
@@ -2099,7 +2189,6 @@ def task_detail(request, project, epic, task):
         'available_tasks': available_tasks,
         'associated_notes': associated_notes,
         'available_notes': available_notes,
-        'edit_mode': edit_mode,
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
@@ -2113,8 +2202,28 @@ def task_detail(request, project, epic, task):
     })
 
 
-def new_subtask(request, project, epic, task):
-    """Create a new subtask."""
+def subtask_detail(request, project, epic, task, subtask):
+    """Subtask detail with epic (existing URL pattern)."""
+    return _subtask_detail_impl(request, project, task, subtask, epic=epic)
+
+
+def subtask_detail_no_epic(request, project, task, subtask):
+    """Subtask detail without epic (new URL pattern)."""
+    return _subtask_detail_impl(request, project, task, subtask, epic=None)
+
+
+def task_detail(request, project, epic, task):
+    """Task detail with epic (existing URL pattern)."""
+    return _task_detail_impl(request, project, task, epic=epic)
+
+
+def task_detail_no_epic(request, project, task):
+    """Task detail without epic (new URL pattern)."""
+    return _task_detail_impl(request, project, task, epic=None)
+
+
+def _new_subtask_impl(request, project, task, epic=None):
+    """Create a new subtask. Epic is optional."""
     if request.method == 'POST':
         title = request.POST.get('title', 'New Subtask')
         status = request.POST.get('status', 'todo')
@@ -2138,10 +2247,14 @@ def new_subtask(request, project, epic, task):
 
         # Add creation activity
         add_activity_entry(metadata, 'created')
-        save_subtask(project, epic, task, subtask_id, metadata, content)
+        save_subtask(project, task, subtask_id, metadata, content, epic_id=epic)
 
         # Return JSON for AJAX requests
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            if epic:
+                url = reverse('subtask_detail', kwargs={'project': project, 'epic': epic, 'task': task, 'subtask': subtask_id})
+            else:
+                url = reverse('subtask_detail_no_epic', kwargs={'project': project, 'task': task, 'subtask': subtask_id})
             return JsonResponse({
                 'success': True,
                 'id': subtask_id,
@@ -2151,17 +2264,22 @@ def new_subtask(request, project, epic, task):
                 'priority': priority,
                 'created': metadata.get('created', ''),
                 'due_date': metadata.get('due_date', ''),
-                'url': reverse('subtask_detail', kwargs={'project': project, 'epic': epic, 'task': task, 'subtask': subtask_id})
+                'url': url
             })
 
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask_id)
+        if epic:
+            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask_id)
+        else:
+            return redirect('subtask_detail_no_epic', project=project, task=task, subtask=subtask_id)
 
     # Load parent metadata for breadcrumbs
     project_metadata, _ = load_project(project, metadata_only=True)
-    epic_metadata, _ = load_epic(project, epic, metadata_only=True)
-    task_metadata, _ = load_task(project, epic, task, metadata_only=True)
     project_title = project_metadata.get('title', 'Untitled Project') if project_metadata else project
-    epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    epic_title = None
+    if epic:
+        epic_metadata, _ = load_epic(project, epic, metadata_only=True)
+        epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    task_metadata, _ = load_task(project, task, epic_id=epic, metadata_only=True)
     task_title = task_metadata.get('title', 'Untitled Task') if task_metadata else task
 
     return render(request, 'pm/new_subtask.html', {
@@ -2174,24 +2292,53 @@ def new_subtask(request, project, epic, task):
     })
 
 
-def subtask_detail(request, project, epic, task, subtask):
-    """Display subtask details with updates."""
-    metadata, content = load_subtask(project, epic, task, subtask)
+def new_subtask(request, project, epic, task):
+    """New subtask with epic (existing URL pattern)."""
+    return _new_subtask_impl(request, project, task, epic=epic)
+
+
+def new_subtask_no_epic(request, project, task):
+    """New subtask without epic (new URL pattern)."""
+    return _new_subtask_impl(request, project, task, epic=None)
+
+
+def _subtask_detail_impl(request, project, task, subtask, epic=None):
+    """Display subtask details with updates. Epic is optional."""
+    # Get epic from metadata if not provided
+    if epic is None:
+        temp_metadata, _ = load_subtask(project, task, subtask, epic_id=None)
+        if temp_metadata:
+            epic = temp_metadata.get('epic_id')
+    
+    metadata, content = load_subtask(project, task, subtask, epic_id=epic)
     if metadata is None:
         raise Http404("Subtask not found")
+    
+    # Ensure epic matches metadata
+    epic = metadata.get('epic_id') or epic
 
     # Load parent metadata for breadcrumbs
     project_metadata, _ = load_project(project, metadata_only=True)
-    epic_metadata, _ = load_epic(project, epic, metadata_only=True)
-    task_metadata, _ = load_task(project, epic, task, metadata_only=True)
     project_title = project_metadata.get('title', 'Untitled Project') if project_metadata else project
-    epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    epic_title = None
+    epic_metadata = None
+    if epic:
+        epic_metadata, _ = load_epic(project, epic, metadata_only=True)
+        epic_title = epic_metadata.get('title', 'Untitled Epic') if epic_metadata else epic
+    task_metadata, _ = load_task(project, task, epic_id=epic, metadata_only=True)
     task_title = task_metadata.get('title', 'Untitled Task') if task_metadata else task
+    
+    # Helper function for redirects
+    def get_subtask_redirect_url():
+        if epic:
+            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+        else:
+            return redirect('subtask_detail_no_epic', project=project, task=task, subtask=subtask)
 
     # Handle checklist operations
     if request.method == 'POST' and handle_checklist_post(request, metadata):
-        save_subtask(project, epic, task, subtask, metadata, content)
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+        save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+        return get_subtask_redirect_url()
 
     # Calculate progress
     _, markdown_total, markdown_progress = calculate_markdown_progress(content)
@@ -2201,6 +2348,18 @@ def subtask_detail(request, project, epic, task, subtask):
     if request.method == 'POST' and 'update_content' in request.POST:
         update_content = request.POST.get('update_content', '').strip()
         if update_content:
+            # Extract @mentions from update content
+            mentions = extract_mentions(update_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            
             # Add new update to metadata
             if 'updates' not in metadata:
                 metadata['updates'] = []
@@ -2211,7 +2370,7 @@ def subtask_detail(request, project, epic, task, subtask):
                 'type': 'user'
             })
 
-            save_subtask(project, epic, task, subtask, metadata, content)
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
 
         return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
 
@@ -2231,8 +2390,6 @@ def subtask_detail(request, project, epic, task, subtask):
     
     updates.sort(key=lambda x: x['timestamp'] if isinstance(x['timestamp'], datetime) else str(x['timestamp']), reverse=True)
 
-    edit_mode = request.GET.get('edit', 'false') == 'true'
-
     # Handle dependency operations
     if request.method == 'POST' and 'add_block' in request.POST:
         block_id = request.POST.get('add_block', '').strip()
@@ -2247,8 +2404,8 @@ def subtask_detail(request, project, epic, task, subtask):
                 add_activity_entry(metadata, 'dependency_added', None, f"blocks {task_title}")
                 # Update reciprocal: target should be blocked_by this subtask
                 update_reciprocal_dependency(project, subtask, block_id, 'blocks', 'add')
-            save_subtask(project, epic, task, subtask, metadata, content)
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+        return get_subtask_redirect_url()
     
     if request.method == 'POST' and 'remove_block' in request.POST:
         block_id = request.POST.get('remove_block', '').strip()
@@ -2260,8 +2417,8 @@ def subtask_detail(request, project, epic, task, subtask):
             add_activity_entry(metadata, 'dependency_removed', f"blocks {task_title}", None)
             # Update reciprocal: remove blocked_by from target
             update_reciprocal_dependency(project, subtask, block_id, 'blocks', 'remove')
-            save_subtask(project, epic, task, subtask, metadata, content)
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+        return get_subtask_redirect_url()
     
     if request.method == 'POST' and 'add_blocked_by' in request.POST:
         blocked_by_id = request.POST.get('add_blocked_by', '').strip()
@@ -2276,8 +2433,8 @@ def subtask_detail(request, project, epic, task, subtask):
                 add_activity_entry(metadata, 'dependency_added', None, f"blocked by {task_title}")
                 # Update reciprocal: target should block this subtask
                 update_reciprocal_dependency(project, subtask, blocked_by_id, 'blocked_by', 'add')
-            save_subtask(project, epic, task, subtask, metadata, content)
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+        return get_subtask_redirect_url()
     
     if request.method == 'POST' and 'remove_blocked_by' in request.POST:
         blocked_by_id = request.POST.get('remove_blocked_by', '').strip()
@@ -2289,8 +2446,8 @@ def subtask_detail(request, project, epic, task, subtask):
             add_activity_entry(metadata, 'dependency_removed', f"blocked by {task_title}", None)
             # Update reciprocal: remove blocks from target
             update_reciprocal_dependency(project, subtask, blocked_by_id, 'blocked_by', 'remove')
-            save_subtask(project, epic, task, subtask, metadata, content)
-        return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+        return get_subtask_redirect_url()
 
     # Handle quick updates (status, priority, schedule)
     if request.method == 'POST' and 'quick_update' in request.POST:
@@ -2301,8 +2458,8 @@ def subtask_detail(request, project, epic, task, subtask):
             if old_status != new_status:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
-                save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'priority':
             old_priority = metadata.get('priority', '')
             priority = request.POST.get('priority', '').strip()
@@ -2312,32 +2469,32 @@ def subtask_detail(request, project, epic, task, subtask):
                 else:
                     metadata.pop('priority', None)
                 add_activity_entry(metadata, 'priority_changed', old_priority, priority)
-                save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'schedule_start':
             old_start = metadata.get('schedule_start', '')
             new_start = request.POST.get('schedule_start', '')
             if old_start != new_start:
                 metadata['schedule_start'] = new_start
                 add_activity_entry(metadata, 'schedule_start_changed', old_start, new_start)
-                save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'schedule_end':
             old_end = metadata.get('schedule_end', '')
             new_end = request.POST.get('schedule_end', '')
             if old_end != new_end:
                 metadata['schedule_end'] = new_end
                 add_activity_entry(metadata, 'schedule_end_changed', old_end, new_end)
-                save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'due_date':
             old_due = metadata.get('due_date', '')
             new_due = request.POST.get('due_date', '')
             if old_due != new_due:
                 metadata['due_date'] = new_due
                 add_activity_entry(metadata, 'due_date_changed', old_due, new_due)
-                save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'add_label':
             label = request.POST.get('label', '').strip()
             if label:
@@ -2346,9 +2503,9 @@ def subtask_detail(request, project, epic, task, subtask):
                     current_labels.append(label)
                     metadata['labels'] = current_labels
                     add_activity_entry(metadata, 'label_added', None, label)
-                    save_subtask(project, epic, task, subtask, metadata, content)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
                     cache.delete("all_labels:v1")  # Invalidate cache
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+            return get_subtask_redirect_url()
         elif quick_update == 'remove_label':
             label = request.POST.get('label', '').strip()
             if label:
@@ -2356,19 +2513,20 @@ def subtask_detail(request, project, epic, task, subtask):
                 if label in current_labels:
                     metadata['labels'] = [l for l in current_labels if l != label]
                     add_activity_entry(metadata, 'label_removed', label, None)
-                    save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'add_person':
             person = request.POST.get('person', '').strip()
             if person:
+                # Ensure person exists (create if needed)
+                person_normalized = ensure_person_exists(person)
                 current_people = normalize_people(metadata.get('people', []))
-                if person not in current_people:
-                    current_people.append(person)
+                if person_normalized not in current_people:
+                    current_people.append(person_normalized)
                     metadata['people'] = current_people
-                    add_activity_entry(metadata, 'person_added', None, person)
-                    save_subtask(project, epic, task, subtask, metadata, content)
-                    cache.delete("all_people:v1")  # Invalidate cache
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                    add_activity_entry(metadata, 'person_added', None, person_normalized)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'remove_person':
             person = request.POST.get('person', '').strip()
             if person:
@@ -2376,8 +2534,8 @@ def subtask_detail(request, project, epic, task, subtask):
                 if person in current_people:
                     metadata['people'] = [p for p in current_people if p != person]
                     add_activity_entry(metadata, 'person_removed', person, None)
-                    save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'add_note':
             note_id = request.POST.get('note_id', '').strip()
             if note_id:
@@ -2389,8 +2547,8 @@ def subtask_detail(request, project, epic, task, subtask):
                     note_meta, _ = load_note(note_id)
                     note_title = note_meta.get('title', note_id) if note_meta else note_id
                     add_activity_entry(metadata, 'note_linked', None, note_title)
-                    save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
         elif quick_update == 'remove_note':
             note_id = request.POST.get('note_id', '').strip()
             if note_id:
@@ -2401,8 +2559,31 @@ def subtask_detail(request, project, epic, task, subtask):
                     note_title = note_meta.get('title', note_id) if note_meta else note_id
                     metadata['notes'] = [n for n in notes_list if n != note_id]
                     add_activity_entry(metadata, 'note_unlinked', note_title, None)
-                    save_subtask(project, epic, task, subtask, metadata, content)
-            return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            return get_subtask_redirect_url()
+        elif quick_update == 'description':
+            new_content = request.POST.get('description', '').strip()
+            content = new_content
+            # Extract @mentions from description content
+            mentions = extract_mentions(new_content)
+            if mentions:
+                # Ensure persons exist and merge into metadata['people']
+                normalized_mentions = ensure_people_exist(mentions)
+                current_people = normalize_people(metadata.get('people', []))
+                # Merge mentions, avoiding duplicates
+                for mention in normalized_mentions:
+                    if mention.lower() not in [p.lower() for p in current_people]:
+                        current_people.append(mention)
+                metadata['people'] = current_people
+            save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+            # Return JSON for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                rendered = render_markdown(new_content)
+                return JsonResponse({
+                    'success': True,
+                    'content': rendered
+                })
+            return get_subtask_redirect_url()
 
     if request.method == 'POST' and 'title' in request.POST:
         # Handle form submission for editing
@@ -2421,7 +2602,7 @@ def subtask_detail(request, project, epic, task, subtask):
             metadata.pop('labels', None)
         content = request.POST.get('content', content)
 
-        save_subtask(project, epic, task, subtask, metadata, content)
+        save_subtask(project, task, subtask, metadata, content, epic_id=epic)
 
         return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
 
@@ -2502,6 +2683,8 @@ def subtask_detail(request, project, epic, task, subtask):
         'metadata': metadata,
         'content': content,
         'project': project,
+        'epic': epic,
+        'epic_title': epic_title,
         'project_title': project_title,
         'epic': epic,
         'epic_title': epic_title,
@@ -2520,7 +2703,6 @@ def subtask_detail(request, project, epic, task, subtask):
         'available_tasks': available_tasks,
         'associated_notes': associated_notes,
         'available_notes': available_notes,
-        'edit_mode': edit_mode,
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
@@ -2535,50 +2717,36 @@ def get_all_scheduled_tasks():
     if cached is not None:
         return cached
 
-    projects_dir = safe_join_path('projects')
     scheduled_tasks = []
     
-    if not os.path.exists(projects_dir):
-        return []
-        
-    try:
-        # Projects are directories in projects_dir
-        for p_id in os.listdir(projects_dir):
-            p_dir_path = os.path.join(projects_dir, p_id)
-            if not os.path.isdir(p_dir_path):
-                continue
-            
-            epics_dir = os.path.join(p_dir_path, 'epics')
-            if os.path.exists(epics_dir):
-                for e_id in os.listdir(epics_dir):
-                    e_dir_path = os.path.join(epics_dir, e_id)
-                    if not os.path.isdir(e_dir_path):
-                        continue
+    # Query all tasks with schedule_start or schedule_end
+    tasks = Entity.objects.select_related('status_fk').filter(type='task').exclude(
+        schedule_start='', schedule_end=''
+    ).exclude(schedule_start__isnull=True, schedule_end__isnull=True)
+    
+    for task in tasks:
+        if task.schedule_start or task.schedule_end:
+            # Get project color
+            try:
+                project = Entity.objects.get(id=task.project_id, type='project')
+                project_color = get_project_color(task.project_id, project.color)
+            except Entity.DoesNotExist:
+                project_color = get_project_color(task.project_id, None)
                     
-                    tasks_dir = os.path.join(e_dir_path, 'tasks')
-                    if os.path.exists(tasks_dir):
-                        for t_filename in os.listdir(tasks_dir):
-                            if t_filename.endswith('.md'):
-                                t_id = t_filename[:-3]
-                                t_metadata, _ = load_task(p_id, e_id, t_id, metadata_only=True)
-                                if t_metadata and (t_metadata.get('schedule_start') or t_metadata.get('schedule_end')):
-                                    # Get project color
-                                    p_metadata, _ = load_project(p_id, metadata_only=True)
-                                    project_color = get_project_color(p_id, p_metadata.get('color') if p_metadata else None)
-                                    scheduled_tasks.append({
-                                        'id': t_id,
-                                        'project_id': p_id,
-                                        'epic_id': e_id,
-                                        'title': t_metadata.get('title', 'Untitled Task'),
-                                        'seq_id': t_metadata.get('seq_id', ''),
-                                        'status': t_metadata.get('status', 'todo'),
-                                        'schedule_start': t_metadata.get('schedule_start', ''),
-                                        'schedule_end': t_metadata.get('schedule_end', ''),
-                                        'project_color': project_color,
-                                        'project_color_bg': hex_to_rgba(project_color, 0.15)
-                                    })
-    except OSError as e:
-        logger.error(f"Error scanning for scheduled tasks: {e}")
+            task_status = task.status or 'todo'
+            scheduled_tasks.append({
+                'id': task.id,
+                'project_id': task.project_id,
+                'epic_id': task.epic_id,
+                'title': task.title or 'Untitled Task',
+                'seq_id': task.seq_id or '',
+                'status': task_status,
+                'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                'schedule_start': task.schedule_start or '',
+                'schedule_end': task.schedule_end or '',
+                'project_color': project_color,
+                'project_color_bg': hex_to_rgba(project_color, 0.15)
+            })
         
     cache.set(cache_key, scheduled_tasks, 30)
     return scheduled_tasks
@@ -2591,83 +2759,83 @@ def get_all_projects_hierarchy():
     if cached is not None:
         return cached
 
-    projects_dir = safe_join_path('projects')
     projects = []
+    project_entities = Entity.objects.filter(type='project')
     
-    if not os.path.exists(projects_dir):
-        return []
+    for project in project_entities:
+        project_data = {
+            'id': project.id,
+            'title': project.title or 'Untitled Project',
+            'epics': []
+        }
         
-    try:
-        for p_id in os.listdir(projects_dir):
-            p_dir_path = os.path.join(projects_dir, p_id)
-            if not os.path.isdir(p_dir_path):
-                continue
-            
-            p_metadata, _ = load_project(p_id, metadata_only=True)
-            if p_metadata is None:
-                continue
-            
-            project_data = {
-                'id': p_id,
-                'title': p_metadata.get('title', 'Untitled Project'),
-                'epics': []
+        # Load epics for this project
+        epics = Entity.objects.filter(type='epic', project_id=project.id).order_by('id').prefetch_related('labels')
+        for epic in epics:
+            epic_data = {
+                'id': epic.id,
+                'title': epic.title or 'Untitled Epic',
+                'seq_id': epic.seq_id or '',
+                'tasks': []
             }
             
-            epics_dir = os.path.join(p_dir_path, 'epics')
-            if os.path.exists(epics_dir):
-                for e_id in os.listdir(epics_dir):
-                    e_dir_path = os.path.join(epics_dir, e_id)
-                    if not os.path.isdir(e_dir_path):
-                        continue
-                    
-                    e_metadata, _ = load_epic(p_id, e_id, metadata_only=True)
-                    if e_metadata is None:
-                        continue
-                    
-                    epic_data = {
-                        'id': e_id,
-                        'title': e_metadata.get('title', 'Untitled Epic'),
-                        'seq_id': e_metadata.get('seq_id', ''),
-                        'tasks': []
-                    }
-                    
-                    tasks_dir = os.path.join(e_dir_path, 'tasks')
-                    if os.path.exists(tasks_dir):
-                        for t_filename in os.listdir(tasks_dir):
-                            if t_filename.endswith('.md'):
-                                t_id = t_filename[:-3]
-                                t_metadata, _ = load_task(p_id, e_id, t_id, metadata_only=True)
-                                if t_metadata is None:
-                                    continue
-                                
-                                task_data = {
-                                    'id': t_id,
-                                    'title': t_metadata.get('title', 'Untitled Task'),
-                                    'seq_id': t_metadata.get('seq_id', ''),
-                                    'status': t_metadata.get('status', 'todo'),
-                                    'subtasks': []
-                                }
-                                
-                                subtasks_dir = os.path.join(tasks_dir, t_id, 'subtasks')
-                                if os.path.exists(subtasks_dir):
-                                    for s_filename in os.listdir(subtasks_dir):
-                                        if s_filename.endswith('.md'):
-                                            s_id = s_filename[:-3]
-                                            s_metadata, _ = load_subtask(p_id, e_id, t_id, s_id, metadata_only=True)
-                                            if s_metadata:
-                                                task_data['subtasks'].append({
-                                                    'id': s_id,
-                                                    'title': s_metadata.get('title', 'Untitled Subtask'),
-                                                    'status': s_metadata.get('status', 'todo')
-                                                })
-                                
-                                epic_data['tasks'].append(task_data)
-                    
-                    project_data['epics'].append(epic_data)
+            # Load tasks for this epic
+            tasks = Entity.objects.filter(type='task', project_id=project.id, epic_id=epic.id).prefetch_related('labels')
+            for task in tasks:
+                task_data = {
+                    'id': task.id,
+                    'title': task.title or 'Untitled Task',
+                    'seq_id': task.seq_id or '',
+                    'status': task.status or 'todo',
+                    'subtasks': []
+                }
+                
+                # Load subtasks for this task
+                subtasks = Entity.objects.filter(type='subtask', project_id=project.id, task_id=task.id, epic_id=epic.id).prefetch_related('labels')
+                for subtask in subtasks:
+                    task_data['subtasks'].append({
+                        'id': subtask.id,
+                        'title': subtask.title or 'Untitled Subtask',
+                        'status': subtask.status or 'todo'
+                    })
+                
+                epic_data['tasks'].append(task_data)
             
-            projects.append(project_data)
-    except OSError as e:
-        logger.error(f"Error loading projects hierarchy: {e}")
+            project_data['epics'].append(epic_data)
+        
+        # Load tasks directly under project (without epic)
+        direct_tasks_entities = Entity.objects.filter(type='task', project_id=project.id, epic_id__isnull=True).prefetch_related('labels')
+        direct_tasks = []
+        for task in direct_tasks_entities:
+            task_data = {
+                'id': task.id,
+                'title': task.title or 'Untitled Task',
+                'seq_id': task.seq_id or '',
+                'status': task.status or 'todo',
+                'subtasks': []
+            }
+            
+            # Load subtasks for direct tasks
+            subtasks = Entity.objects.filter(type='subtask', project_id=project.id, task_id=task.id, epic_id__isnull=True).prefetch_related('labels')
+            for subtask in subtasks:
+                task_data['subtasks'].append({
+                    'id': subtask.id,
+                    'title': subtask.title or 'Untitled Subtask',
+                    'status': subtask.status or 'todo'
+                })
+            
+            direct_tasks.append(task_data)
+        
+        if direct_tasks:
+            # Add direct tasks as a special "epic" with None ID
+            project_data['epics'].append({
+                'id': None,
+                'title': 'Direct Tasks',
+                'seq_id': '',
+                'tasks': direct_tasks
+            })
+        
+        projects.append(project_data)
     
     cache.set(cache_key, projects, 30)
     return projects
@@ -2687,77 +2855,42 @@ def parse_date_safe(value):
 
 def get_all_work_items():
     """Return all tasks and subtasks with metadata for work views."""
-    cache_key = "work_items:v1"
+    cache_key = "work_items:v2"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    projects_dir = safe_join_path('projects')
     items = []
 
-    if not os.path.exists(projects_dir):
-        return items
+    # Query all tasks
+    tasks = Entity.objects.filter(type='task').prefetch_related('labels')
+    for task in tasks:
+        items.append({
+            'type': 'task',
+            'id': task.id,
+            'title': task.title or 'Untitled Task',
+            'status': task.status or 'todo',
+            'priority': task.priority or '',
+            'due_date': task.due_date or '',
+            'project_id': task.project_id,
+            'epic_id': task.epic_id,
+        })
 
-    try:
-        for p_id in os.listdir(projects_dir):
-            p_dir_path = os.path.join(projects_dir, p_id)
-            if not os.path.isdir(p_dir_path):
-                continue
-
-            epics_dir = os.path.join(p_dir_path, 'epics')
-            if not os.path.exists(epics_dir):
-                continue
-
-            for e_id in os.listdir(epics_dir):
-                e_dir_path = os.path.join(epics_dir, e_id)
-                if not os.path.isdir(e_dir_path):
-                    continue
-
-                tasks_dir = os.path.join(e_dir_path, 'tasks')
-                if not os.path.exists(tasks_dir):
-                    continue
-
-                for t_filename in os.listdir(tasks_dir):
-                    if not t_filename.endswith('.md'):
-                        continue
-                    t_id = t_filename[:-3]
-                    t_metadata, _ = load_task(p_id, e_id, t_id, metadata_only=True)
-                    if t_metadata:
-                        items.append({
-                            'type': 'task',
-                            'id': t_id,
-                            'title': t_metadata.get('title', 'Untitled Task'),
-                            'status': t_metadata.get('status', 'todo'),
-                            'priority': t_metadata.get('priority', ''),
-                            'due_date': t_metadata.get('due_date', ''),
-                            'project_id': p_id,
-                            'epic_id': e_id,
-                        })
-
-                    subtasks_dir = os.path.join(tasks_dir, t_id, 'subtasks')
-                    if not os.path.exists(subtasks_dir):
-                        continue
-
-                    for s_filename in os.listdir(subtasks_dir):
-                        if not s_filename.endswith('.md'):
-                            continue
-                        s_id = s_filename[:-3]
-                        s_metadata, _ = load_subtask(p_id, e_id, t_id, s_id, metadata_only=True)
-                        if s_metadata:
-                            items.append({
-                                'type': 'subtask',
-                                'id': s_id,
-                                'seq_id': s_metadata.get('seq_id', ''),
-                                'title': s_metadata.get('title', 'Untitled Subtask'),
-                                'status': s_metadata.get('status', 'todo'),
-                                'priority': s_metadata.get('priority', ''),
-                                'due_date': s_metadata.get('due_date', ''),
-                                'project_id': p_id,
-                                'epic_id': e_id,
-                                'task_id': t_id,
-                            })
-    except OSError as e:
-        logger.error(f"Error loading work items: {e}")
+    # Query all subtasks
+    subtasks = Entity.objects.filter(type='subtask').prefetch_related('labels')
+    for subtask in subtasks:
+        items.append({
+            'type': 'subtask',
+            'id': subtask.id,
+            'seq_id': subtask.seq_id or '',
+            'title': subtask.title or 'Untitled Subtask',
+            'status': subtask.status or 'todo',
+            'priority': subtask.priority or '',
+            'due_date': subtask.due_date or '',
+            'project_id': subtask.project_id,
+            'epic_id': subtask.epic_id,
+            'task_id': subtask.task_id,
+        })
 
     cache.set(cache_key, items, 30)
     return items
@@ -2769,49 +2902,28 @@ def find_entity_in_project(project_id, entity_id):
     Returns a dict with 'type', 'epic_id', 'task_id' (if subtask), and path info,
     or None if not found.
     """
-    epics_dir = safe_join_path('projects', project_id, 'epics')
-    if not os.path.exists(epics_dir):
-        return None
-    
+    # Check if it's a task
     try:
-        for e_filename in os.listdir(epics_dir):
-            if not e_filename.endswith('.md'):
-                continue
-            epic_id = e_filename[:-3]
-            
-            tasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks')
-            if not os.path.exists(tasks_dir):
-                continue
-            
-            for t_filename in os.listdir(tasks_dir):
-                if not t_filename.endswith('.md'):
-                    continue
-                task_id = t_filename[:-3]
-                
-                # Check if this is the task we're looking for
-                if task_id == entity_id:
-                    return {
-                        'type': 'task',
-                        'epic_id': epic_id,
-                        'task_id': task_id
-                    }
-                
-                # Check subtasks
-                subtasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                if os.path.exists(subtasks_dir):
-                    for s_filename in os.listdir(subtasks_dir):
-                        if not s_filename.endswith('.md'):
-                            continue
-                        subtask_id = s_filename[:-3]
-                        if subtask_id == entity_id:
-                            return {
-                                'type': 'subtask',
-                                'epic_id': epic_id,
-                                'task_id': task_id,
-                                'subtask_id': subtask_id
-                            }
-    except OSError as e:
-        logger.error(f"Error finding entity {entity_id}: {e}")
+        task = Entity.objects.get(id=entity_id, type='task', project_id=project_id)
+        return {
+            'type': 'task',
+            'epic_id': task.epic_id,
+            'task_id': task.id
+        }
+    except Entity.DoesNotExist:
+        pass
+    
+    # Check if it's a subtask
+    try:
+        subtask = Entity.objects.get(id=entity_id, type='subtask', project_id=project_id)
+        return {
+            'type': 'subtask',
+            'epic_id': subtask.epic_id,
+            'task_id': subtask.task_id,
+            'subtask_id': subtask.id
+        }
+    except Entity.DoesNotExist:
+        pass
     
     return None
 
@@ -2840,7 +2952,7 @@ def update_reciprocal_dependency(project_id, source_id, target_id, relationship,
     
     # Load and update the target entity
     if target_info['type'] == 'task':
-        metadata, content = load_task(project_id, target_info['epic_id'], target_info['task_id'])
+        metadata, content = load_task(project_id, target_info['task_id'], epic_id=target_info.get('epic_id'))
         if metadata is None:
             return
         
@@ -2853,11 +2965,11 @@ def update_reciprocal_dependency(project_id, source_id, target_id, relationship,
         elif action == 'remove':
             metadata[reciprocal] = [x for x in metadata[reciprocal] if x != source_id]
         
-        save_task(project_id, target_info['epic_id'], target_info['task_id'], metadata, content)
+        save_task(project_id, target_info['task_id'], metadata, content, epic_id=target_info.get('epic_id'))
     
     elif target_info['type'] == 'subtask':
-        metadata, content = load_subtask(project_id, target_info['epic_id'], 
-                                          target_info['task_id'], target_info['subtask_id'])
+        metadata, content = load_subtask(project_id, target_info['task_id'], 
+                                          target_info['subtask_id'], epic_id=target_info.get('epic_id'))
         if metadata is None:
             return
         
@@ -2870,89 +2982,63 @@ def update_reciprocal_dependency(project_id, source_id, target_id, relationship,
         elif action == 'remove':
             metadata[reciprocal] = [x for x in metadata[reciprocal] if x != source_id]
         
-        save_subtask(project_id, target_info['epic_id'], target_info['task_id'], 
-                     target_info['subtask_id'], metadata, content)
+        save_subtask(project_id, target_info['task_id'], 
+                     target_info['subtask_id'], metadata, content, epic_id=target_info.get('epic_id'))
 
 
 def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude_subtask_id=None):
     """Get all tasks and subtasks in a project for dependency selection."""
     tasks_list = []
-    epics_dir = safe_join_path('projects', project_id, 'epics')
-    
-    if not os.path.exists(epics_dir):
-        return tasks_list
     
     # Cache epic titles
     epic_titles = {}
+    epics = Entity.objects.filter(type='epic', project_id=project_id)
+    for epic in epics:
+        epic_titles[epic.id] = epic.title or 'Untitled Epic'
     
-    try:
-        for e_filename in os.listdir(epics_dir):
-            if not e_filename.endswith('.md'):
+    # Query all tasks in the project (with and without epic)
+    tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project_id).prefetch_related('labels')
+    for task in tasks:
+        if exclude_task_id and task.id == exclude_task_id:
+            continue
+        
+        task_status = task.status or 'todo'
+        tasks_list.append({
+            'type': 'task',
+            'id': task.id,
+            'epic_id': task.epic_id,
+            'epic_title': epic_titles.get(task.epic_id, 'Untitled Epic') if task.epic_id else None,
+            'seq_id': task.seq_id or '',
+            'title': task.title or 'Untitled Task',
+            'status': task_status,
+            'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+            'priority': task.priority or ''
+        })
+        
+        task_title = task.title or 'Untitled Task'
+        task_seq = task.seq_id or ''
+        
+        # Query subtasks for this task
+        subtasks = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project_id, task_id=task.id).prefetch_related('labels')
+        for subtask in subtasks:
+            if exclude_subtask_id and subtask.id == exclude_subtask_id:
                 continue
-            epic_id = e_filename[:-3]
             
-            # Load epic metadata for title
-            e_meta, _ = load_epic(project_id, epic_id, metadata_only=True)
-            if e_meta:
-                epic_titles[epic_id] = e_meta.get('title', 'Untitled Epic')
-                epic_seq = e_meta.get('seq_id', '')
-            else:
-                epic_titles[epic_id] = 'Untitled Epic'
-                epic_seq = ''
-            
-            tasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks')
-            if not os.path.exists(tasks_dir):
-                continue
-            
-            for t_filename in os.listdir(tasks_dir):
-                if not t_filename.endswith('.md'):
-                    continue
-                task_id = t_filename[:-3]
-                if exclude_task_id and task_id == exclude_task_id:
-                    continue
-                
-                t_meta, _ = load_task(project_id, epic_id, task_id, metadata_only=True)
-                if t_meta:
-                    tasks_list.append({
-                        'type': 'task',
-                        'id': task_id,
-                        'epic_id': epic_id,
-                        'epic_title': epic_titles.get(epic_id, 'Untitled Epic'),
-                        'seq_id': t_meta.get('seq_id', ''),
-                        'title': t_meta.get('title', 'Untitled Task'),
-                        'status': t_meta.get('status', 'todo'),
-                        'priority': t_meta.get('priority', '')
-                    })
-                    
-                    task_title = t_meta.get('title', 'Untitled Task')
-                    task_seq = t_meta.get('seq_id', '')
-                
-                    subtasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                    if os.path.exists(subtasks_dir):
-                        for s_filename in os.listdir(subtasks_dir):
-                            if not s_filename.endswith('.md'):
-                                continue
-                            subtask_id = s_filename[:-3]
-                            if exclude_subtask_id and subtask_id == exclude_subtask_id:
-                                continue
-                            
-                            s_meta, _ = load_subtask(project_id, epic_id, task_id, subtask_id, metadata_only=True)
-                            if s_meta:
-                                tasks_list.append({
-                                    'type': 'subtask',
-                                    'id': subtask_id,
-                                    'seq_id': s_meta.get('seq_id', ''),
-                                    'task_id': task_id,
-                                    'task_title': task_title,
-                                    'task_seq_id': task_seq,
-                                    'epic_id': epic_id,
-                                    'epic_title': epic_titles.get(epic_id, 'Untitled Epic'),
-                                    'title': s_meta.get('title', 'Untitled Subtask'),
-                                    'status': s_meta.get('status', 'todo'),
-                                    'priority': s_meta.get('priority', '')
-                                })
-    except OSError as e:
-        logger.error(f"Error loading tasks for dependencies: {e}")
+            subtask_status = subtask.status or 'todo'
+            tasks_list.append({
+                'type': 'subtask',
+                'id': subtask.id,
+                'seq_id': subtask.seq_id or '',
+                'task_id': task.id,
+                'task_title': task_title,
+                'task_seq_id': task_seq,
+                'epic_id': subtask.epic_id,
+                'epic_title': epic_titles.get(subtask.epic_id, 'Untitled Epic') if subtask.epic_id else None,
+                'title': subtask.title or 'Untitled Subtask',
+                'status': subtask_status,
+                'status_display': subtask.status_fk.display_name if subtask.status_fk else _status_display_fallback(subtask_status or subtask.status),
+                'priority': subtask.priority or ''
+            })
     
     # Sort by seq_id
     tasks_list.sort(key=lambda x: (x.get('seq_id', 'z999'), x.get('title', '')))
@@ -2966,88 +3052,83 @@ def get_project_activity(project_id):
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
-    
-    # Use metadata_only=True for all loads in activity to speed up
 
     activity = []
-    epics_dir = safe_join_path('projects', project_id, 'epics')
-
-    if not os.path.exists(epics_dir):
-        return activity
-
-    for e_filename in os.listdir(epics_dir):
-        if not e_filename.endswith('.md'):
-            continue
-        epic_id = e_filename[:-3]
-        e_meta, _ = load_epic(project_id, epic_id, metadata_only=True)
-        if e_meta:
-            # Include epic updates/activity
-            for u in e_meta.get('updates', []):
-                ts = u.get('timestamp')
-                try:
-                    ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
-                except ValueError:
-                    ts_dt = ts
-                activity.append({
-                    'type': 'epic',
-                    'entity_type': 'epic',
-                    'title': e_meta.get('title', 'Untitled Epic'),
-                    'content': u.get('content', ''),
-                    'update_type': u.get('type', 'user'),  # Default to 'user' for backwards compatibility
-                    'timestamp': ts_dt,
-                    'url': reverse('epic_detail', kwargs={'project': project_id, 'epic': epic_id})
-                })
-        
-        tasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks')
-        if not os.path.exists(tasks_dir):
-            continue
-
-        for t_filename in os.listdir(tasks_dir):
-            if not t_filename.endswith('.md'):
-                continue
-            task_id = t_filename[:-3]
-            t_meta, _ = load_task(project_id, epic_id, task_id, metadata_only=True)
-            if t_meta:
-                for u in t_meta.get('updates', []):
-                    ts = u.get('timestamp')
-                    try:
-                        ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
-                    except ValueError:
-                        ts_dt = ts
-                    activity.append({
-                        'type': 'task',
-                        'entity_type': 'task',
-                        'title': t_meta.get('title', 'Untitled Task'),
-                        'content': u.get('content', ''),
-                        'update_type': u.get('type', 'user'),  # Default to 'user' for backwards compatibility
-                        'timestamp': ts_dt,
-                        'url': reverse('task_detail', kwargs={'project': project_id, 'epic': epic_id, 'task': task_id})
-                    })
-
-            subtasks_dir = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-            if not os.path.exists(subtasks_dir):
-                continue
-            for s_filename in os.listdir(subtasks_dir):
-                if not s_filename.endswith('.md'):
-                    continue
-                subtask_id = s_filename[:-3]
-                s_meta, _ = load_subtask(project_id, epic_id, task_id, subtask_id, metadata_only=True)
-                if s_meta:
-                    for u in s_meta.get('updates', []):
-                        ts = u.get('timestamp')
-                        try:
-                            ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
-                        except ValueError:
-                            ts_dt = ts
-                        activity.append({
-                            'type': 'subtask',
-                            'entity_type': 'subtask',
-                            'title': s_meta.get('title', 'Untitled Subtask'),
-                            'content': u.get('content', ''),
-                            'update_type': u.get('type', 'user'),  # Default to 'user' for backwards compatibility
-                            'timestamp': ts_dt,
-                            'url': reverse('subtask_detail', kwargs={'project': project_id, 'epic': epic_id, 'task': task_id, 'subtask': subtask_id})
-                        })
+    
+    # Query all epics in the project
+    epics = Entity.objects.filter(type='epic', project_id=project_id)
+    for epic in epics:
+        # Get updates from Update table
+        updates = Update.objects.filter(entity_id=epic.id).order_by('timestamp')
+        for u in updates:
+            ts = u.timestamp
+            try:
+                ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
+            except ValueError:
+                ts_dt = ts
+            activity.append({
+                'type': 'epic',
+                'entity_type': 'epic',
+                'title': epic.title or 'Untitled Epic',
+                'content': u.content,
+                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'timestamp': ts_dt,
+                'url': reverse('epic_detail', kwargs={'project': project_id, 'epic': epic.id})
+            })
+    
+    # Query all tasks in the project (with and without epic)
+    tasks = Entity.objects.filter(type='task', project_id=project_id)
+    for task in tasks:
+        # Get updates from Update table
+        updates = Update.objects.filter(entity_id=task.id).order_by('timestamp')
+        for u in updates:
+            ts = u.timestamp
+            try:
+                ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
+            except ValueError:
+                ts_dt = ts
+            
+            if task.epic_id:
+                url = reverse('task_detail', kwargs={'project': project_id, 'epic': task.epic_id, 'task': task.id})
+            else:
+                url = reverse('task_detail_no_epic', kwargs={'project': project_id, 'task': task.id})
+            
+            activity.append({
+                'type': 'task',
+                'entity_type': 'task',
+                'title': task.title or 'Untitled Task',
+                'content': u.content,
+                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'timestamp': ts_dt,
+                'url': url
+            })
+    
+    # Query all subtasks in the project
+    subtasks = Entity.objects.filter(type='subtask', project_id=project_id)
+    for subtask in subtasks:
+        # Get updates from Update table
+        updates = Update.objects.filter(entity_id=subtask.id).order_by('timestamp')
+        for u in updates:
+            ts = u.timestamp
+            try:
+                ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
+            except ValueError:
+                ts_dt = ts
+            
+            if subtask.epic_id:
+                url = reverse('subtask_detail', kwargs={'project': project_id, 'epic': subtask.epic_id, 'task': subtask.task_id, 'subtask': subtask.id})
+            else:
+                url = reverse('subtask_detail_no_epic', kwargs={'project': project_id, 'task': subtask.task_id, 'subtask': subtask.id})
+            
+            activity.append({
+                'type': 'subtask',
+                'entity_type': 'subtask',
+                'title': subtask.title or 'Untitled Subtask',
+                'content': u.content,
+                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'timestamp': ts_dt,
+                'url': url
+            })
 
     activity.sort(key=lambda x: x['timestamp'] if isinstance(x['timestamp'], datetime) else str(x['timestamp']), reverse=True)
     activity = activity[:50]  # Increased limit to show more activity
@@ -3229,21 +3310,25 @@ def update_task_schedule(request):
         schedule_start = request.POST.get('schedule_start')
         schedule_end = request.POST.get('schedule_end')
         
-        if not all([project_id, epic_id, task_id, schedule_start]):
+        if not all([project_id, task_id, schedule_start]):
             return JsonResponse({'error': 'Missing required parameters'}, status=400)
         
+        # Epic is optional
+        epic_id = request.POST.get('epic_id') or None
+        
         # Validate IDs
-        if not (is_valid_project_id(project_id) and 
-                validate_id(epic_id, 'epic') and 
-                validate_id(task_id, 'task')):
+        if not is_valid_project_id(project_id) or not validate_id(task_id, 'task'):
             return JsonResponse({'error': 'Invalid IDs'}, status=400)
+        
+        if epic_id and not validate_id(epic_id, 'epic'):
+            epic_id = None
         
         if subtask_id:
             # Update subtask
             if not validate_id(subtask_id, 'subtask'):
                 return JsonResponse({'error': 'Invalid subtask ID'}, status=400)
             
-            metadata, content = load_subtask(project_id, epic_id, task_id, subtask_id)
+            metadata, content = load_subtask(project_id, task_id, subtask_id, epic_id=epic_id)
             if metadata is None:
                 return JsonResponse({'error': 'Subtask not found'}, status=404)
             
@@ -3259,10 +3344,10 @@ def update_task_schedule(request):
                 except ValueError:
                     pass
             
-            save_subtask(project_id, epic_id, task_id, subtask_id, metadata, content)
+            save_subtask(project_id, task_id, subtask_id, metadata, content, epic_id=epic_id)
         else:
             # Update task
-            metadata, content = load_task(project_id, epic_id, task_id)
+            metadata, content = load_task(project_id, task_id, epic_id=epic_id)
             if metadata is None:
                 return JsonResponse({'error': 'Task not found'}, status=404)
             
@@ -3278,7 +3363,7 @@ def update_task_schedule(request):
                 except ValueError:
                     pass
             
-            save_task(project_id, epic_id, task_id, metadata, content)
+            save_task(project_id, task_id, metadata, content, epic_id=epic_id)
         
         return JsonResponse({'success': True})
     except Exception as e:
@@ -3310,22 +3395,22 @@ def reorder_items(request):
             for idx, t_id in enumerate(ids):
                 if not validate_id(t_id, 'task'):
                     continue
-                meta, content = load_task(project_id, epic_id, t_id)
+                meta, content = load_task(project_id, t_id, epic_id=epic_id)
                 if meta is None:
                     continue
                 meta['order'] = idx
-                save_task(project_id, epic_id, t_id, meta, content)
+                save_task(project_id, t_id, meta, content, epic_id=epic_id)
         elif item_type == 'subtask':
             if not task_id or not validate_id(task_id, 'task'):
                 return JsonResponse({'error': 'Invalid task ID'}, status=400)
             for idx, s_id in enumerate(ids):
                 if not validate_id(s_id, 'subtask'):
                     continue
-                meta, content = load_subtask(project_id, epic_id, task_id, s_id)
+                meta, content = load_subtask(project_id, task_id, s_id, epic_id=epic_id)
                 if meta is None:
                     continue
                 meta['order'] = idx
-                save_subtask(project_id, epic_id, task_id, s_id, meta, content)
+                save_subtask(project_id, task_id, s_id, meta, content, epic_id=epic_id)
         else:
             return JsonResponse({'error': 'Invalid type'}, status=400)
     except Exception as e:
@@ -3347,32 +3432,38 @@ def update_task_status(request):
     subtask_id = request.POST.get('subtask_id')
     status = request.POST.get('status')
 
-    if not all([item_type, project_id, epic_id, status]):
+    if not all([item_type, project_id, status]):
         return JsonResponse({'error': 'Missing parameters'}, status=400)
 
-    if not (is_valid_project_id(project_id) and validate_id(epic_id, 'epic')):
-        return JsonResponse({'error': 'Invalid IDs'}, status=400)
+    # Epic is optional
+    epic_id = request.POST.get('epic_id') or None
 
-    if status not in ['todo', 'in_progress', 'done']:
+    if not is_valid_project_id(project_id):
+        return JsonResponse({'error': 'Invalid project ID'}, status=400)
+
+    if epic_id and not validate_id(epic_id, 'epic'):
+        epic_id = None
+
+    if status not in ['todo', 'in_progress', 'done', 'on_hold', 'blocked', 'cancelled', 'next']:
         return JsonResponse({'error': 'Invalid status'}, status=400)
 
     try:
         if item_type == 'task':
             if not validate_id(task_id, 'task'):
                 return JsonResponse({'error': 'Invalid task ID'}, status=400)
-            meta, content = load_task(project_id, epic_id, task_id)
+            meta, content = load_task(project_id, task_id, epic_id=epic_id)
             if meta is None:
                 return JsonResponse({'error': 'Task not found'}, status=404)
             meta['status'] = status
-            save_task(project_id, epic_id, task_id, meta, content)
+            save_task(project_id, task_id, meta, content, epic_id=epic_id)
         elif item_type == 'subtask':
             if not task_id or not validate_id(task_id, 'task') or not validate_id(subtask_id, 'subtask'):
                 return JsonResponse({'error': 'Invalid IDs'}, status=400)
-            meta, content = load_subtask(project_id, epic_id, task_id, subtask_id)
+            meta, content = load_subtask(project_id, task_id, subtask_id, epic_id=epic_id)
             if meta is None:
                 return JsonResponse({'error': 'Subtask not found'}, status=404)
             meta['status'] = status
-            save_subtask(project_id, epic_id, task_id, subtask_id, meta, content)
+            save_subtask(project_id, task_id, subtask_id, meta, content, epic_id=epic_id)
         else:
             return JsonResponse({'error': 'Invalid type'}, status=400)
     except Exception as e:
@@ -3406,7 +3497,7 @@ def bulk_update_items(request):
         return JsonResponse({'error': 'No items selected'}, status=400)
 
     # Validate action and value
-    valid_statuses = ['todo', 'in_progress', 'done']
+    valid_statuses = ['todo', 'in_progress', 'done', 'on_hold', 'blocked', 'cancelled', 'next']
     valid_priorities = ['', '1', '2', '3', '4', '5']
     
     if action == 'status' and value not in valid_statuses:
@@ -3423,19 +3514,18 @@ def bulk_update_items(request):
                 if not validate_id(t_id, 'task'):
                     continue
                 if action == 'delete':
-                    # Delete task and its subtasks
-                    task_path = safe_join_path('projects', project_id, 'epics', epic_id, 'tasks', t_id)
-                    if os.path.exists(task_path + '.md'):
-                        os.remove(task_path + '.md')
+                    # Delete task and its subtasks from database
+                    try:
+                        task = Entity.objects.get(id=t_id, type='task', project_id=project_id)
+                        # Delete all subtasks first
+                        Entity.objects.filter(type='subtask', project_id=project_id, task_id=t_id).delete()
+                        # Delete the task
+                        task.delete()
                         updated += 1
-                    # Remove subtasks directory if exists
-                    subtasks_dir = os.path.join(task_path, 'subtasks')
-                    if os.path.exists(subtasks_dir):
-                        shutil.rmtree(subtasks_dir)
-                    if os.path.exists(task_path):
-                        os.rmdir(task_path)
+                    except Entity.DoesNotExist:
+                        pass
                 else:
-                    meta, content = load_task(project_id, epic_id, t_id)
+                    meta, content = load_task(project_id, t_id, epic_id=epic_id)
                     if meta is None:
                         continue
                     if action == 'status':
@@ -3451,7 +3541,7 @@ def bulk_update_items(request):
                             elif 'priority' in meta:
                                 del meta['priority']
                             add_activity_entry(meta, 'priority_changed', old_priority, value)
-                    save_task(project_id, epic_id, t_id, meta, content)
+                    save_task(project_id, t_id, meta, content, epic_id=epic_id)
                     updated += 1
                     
         elif item_type == 'subtask':
@@ -3461,13 +3551,15 @@ def bulk_update_items(request):
                 if not validate_id(s_id, 'subtask'):
                     continue
                 if action == 'delete':
-                    subtask_path = safe_join_path('projects', project_id, 'epics', epic_id, 
-                                                   'tasks', task_id, 'subtasks', s_id + '.md')
-                    if os.path.exists(subtask_path):
-                        os.remove(subtask_path)
+                    # Delete subtask from database
+                    try:
+                        subtask = Entity.objects.get(id=s_id, type='subtask', project_id=project_id, task_id=task_id)
+                        subtask.delete()
                         updated += 1
+                    except Entity.DoesNotExist:
+                        pass
                 else:
-                    meta, content = load_subtask(project_id, epic_id, task_id, s_id)
+                    meta, content = load_subtask(project_id, task_id, s_id, epic_id=epic_id)
                     if meta is None:
                         continue
                     if action == 'status':
@@ -3483,7 +3575,7 @@ def bulk_update_items(request):
                             elif 'priority' in meta:
                                 del meta['priority']
                             add_activity_entry(meta, 'priority_changed', old_priority, value)
-                    save_subtask(project_id, epic_id, task_id, s_id, meta, content)
+                    save_subtask(project_id, task_id, s_id, meta, content, epic_id=epic_id)
                     updated += 1
         else:
             return JsonResponse({'error': 'Invalid type'}, status=400)
@@ -3658,23 +3750,21 @@ def kanban_view(request, project=None, epic=None):
         if epic_metadata is None:
             raise Http404("Epic not found")
         
-        tasks_dir = safe_join_path('projects', project, 'epics', epic, 'tasks')
         items = []
-        if os.path.exists(tasks_dir):
-            for filename in os.listdir(tasks_dir):
-                if filename.endswith('.md'):
-                    task_id = filename[:-3]
-                    t_meta, _ = load_task(project, epic, task_id, metadata_only=True)
-                    if t_meta and not t_meta.get('archived', False):
-                        items.append({
-                            'type': 'task',
-                            'id': task_id,
-                            'title': t_meta.get('title', 'Untitled Task'),
-                            'status': t_meta.get('status', 'todo'),
-                            'priority': t_meta.get('priority', ''),
-                            'project_id': project,
-                            'epic_id': epic,
-                        })
+        tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic)
+        for task in tasks:
+            if not task.archived:
+                task_status = task.status or 'todo'
+                items.append({
+                    'type': 'task',
+                    'id': task.id,
+                    'title': task.title or 'Untitled Task',
+                    'status': task_status,
+                    'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                    'priority': task.priority or '',
+                    'project_id': project,
+                    'epic_id': epic,
+                })
         
         project_metadata, _ = load_project(project, metadata_only=True)
         epic_title = epic_metadata.get('title', 'Untitled Epic')
@@ -3695,33 +3785,27 @@ def kanban_view(request, project=None, epic=None):
             raise Http404("Project not found")
         
         items = []
-        epics_dir = safe_join_path('projects', project, 'epics')
-        if os.path.exists(epics_dir):
-            for e_filename in os.listdir(epics_dir):
-                if not e_filename.endswith('.md'):
-                    continue
-                epic_id = e_filename[:-3]
-                e_meta, _ = load_epic(project, epic_id, metadata_only=True)
-                if e_meta and e_meta.get('archived', False):
-                    continue
-                
-                tasks_dir = safe_join_path('projects', project, 'epics', epic_id, 'tasks')
-                if os.path.exists(tasks_dir):
-                    for t_filename in os.listdir(tasks_dir):
-                        if t_filename.endswith('.md'):
-                            task_id = t_filename[:-3]
-                            t_meta, _ = load_task(project, epic_id, task_id, metadata_only=True)
-                            if t_meta and not t_meta.get('archived', False):
-                                items.append({
-                                    'type': 'task',
-                                    'id': task_id,
-                                    'title': t_meta.get('title', 'Untitled Task'),
-                                    'status': t_meta.get('status', 'todo'),
-                                    'priority': t_meta.get('priority', ''),
-                                    'project_id': project,
-                                    'epic_id': epic_id,
-                                    'epic_title': e_meta.get('title', 'Untitled Epic')
-                                })
+        epics = Entity.objects.filter(type='epic', project_id=project)
+        for epic_entity in epics:
+            if epic_entity.archived:
+                continue
+            
+            epic_title = epic_entity.title or 'Untitled Epic'
+            tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic_entity.id)
+            for task in tasks:
+                if not task.archived:
+                    task_status = task.status or 'todo'
+                    items.append({
+                        'type': 'task',
+                        'id': task.id,
+                        'title': task.title or 'Untitled Task',
+                        'status': task_status,
+                        'status_display': task.status_fk.display_name if task.status_fk else _status_display_fallback(task_status or task.status),
+                        'priority': task.priority or '',
+                        'project_id': project,
+                        'epic_id': epic_entity.id,
+                        'epic_title': epic_title
+                    })
         
         project_title = project_metadata.get('title', 'Untitled Project')
         
@@ -3795,18 +3879,31 @@ def search_view(request):
                     elif entity.type == 'epic':
                         url = reverse('epic_detail', kwargs={'project': entity.project_id, 'epic': entity.id})
                     elif entity.type == 'task':
-                        url = reverse('task_detail', kwargs={
-                            'project': entity.project_id, 
-                            'epic': entity.epic_id, 
-                            'task': entity.id
-                        })
+                        if entity.epic_id:
+                            url = reverse('task_detail', kwargs={
+                                'project': entity.project_id, 
+                                'epic': entity.epic_id, 
+                                'task': entity.id
+                            })
+                        else:
+                            url = reverse('task_detail_no_epic', kwargs={
+                                'project': entity.project_id,
+                                'task': entity.id
+                            })
                     elif entity.type == 'subtask':
-                        url = reverse('subtask_detail', kwargs={
-                            'project': entity.project_id,
-                            'epic': entity.epic_id,
-                            'task': entity.task_id,
-                            'subtask': entity.id
-                        })
+                        if entity.epic_id:
+                            url = reverse('subtask_detail', kwargs={
+                                'project': entity.project_id,
+                                'epic': entity.epic_id,
+                                'task': entity.task_id,
+                                'subtask': entity.id
+                            })
+                        else:
+                            url = reverse('subtask_detail_no_epic', kwargs={
+                                'project': entity.project_id,
+                                'task': entity.task_id,
+                                'subtask': entity.id
+                            })
                     elif entity.type == 'note':
                         url = reverse('note_detail', kwargs={'note_id': entity.id})
                     else:
@@ -3825,14 +3922,8 @@ def search_view(request):
                     elif result.get('labels_match'):
                         snippet = f"Labels: {result['labels_match']}"
                     
-                    # Get seq_id from metadata_json if available
-                    seq_id = ''
-                    try:
-                        import json
-                        meta = json.loads(entity.metadata_json)
-                        seq_id = meta.get('seq_id', '')
-                    except:
-                        pass
+                    # Get seq_id from entity
+                    seq_id = entity.seq_id or ''
                     
                     results.append({
                         'type': entity.type,
@@ -3842,249 +3933,11 @@ def search_view(request):
                         'snippet': highlight_snippet(snippet, query)
                     })
         except Exception as e:
-            logger.warning(f"FTS5 search failed, falling back to file search: {e}")
-            use_fts5 = False
-        
-        # Skip fallback if FTS5 succeeded with results
-        if use_fts5 and results:
-            return render(request, 'pm/search.html', {
-                'query': query,
-                'results': results,
-            })
-        
-        # Fallback to file-based search
-        q = query.lower()
-        projects_dir = safe_join_path('projects')
-
-        if os.path.exists(projects_dir):
-            project_ids = set()
-            for entry in os.listdir(projects_dir):
-                entry_path = os.path.join(projects_dir, entry)
-                if entry.endswith('.md'):
-                    candidate_id = entry[:-3]
-                    if is_valid_project_id(candidate_id):
-                        project_ids.add(candidate_id)
-                elif os.path.isdir(entry_path):
-                    if is_valid_project_id(entry):
-                        project_ids.add(entry)
-
-            for p_id in project_ids:
-                p_meta, _ = load_project(p_id, metadata_only=True)
-                if p_meta is None:
-                    continue
-                title_text = p_meta.get('title', '').lower()
-                snippet = ''
-                if q in title_text:
-                    snippet = f"Title: {p_meta.get('title', 'Untitled Project')}"
-                    key = ('project', p_id)
-                    if key not in seen:
-                        seen.add(key)
-                        results.append({
-                        'type': 'project',
-                        'title': p_meta.get('title', 'Untitled Project'),
-                            'url': reverse('project_detail', kwargs={'project': p_id}),
-                            'snippet': highlight_snippet(snippet, query)
-                        })
-                else:
-                    _, p_content = load_project(p_id, metadata_only=False)
-                    content_snippet = get_match_snippet(p_content or '', query)
-                    if q in (p_content or '').lower():
-                        key = ('project', p_id)
-                        if key not in seen:
-                            seen.add(key)
-                            results.append({
-                            'type': 'project',
-                            'title': p_meta.get('title', 'Untitled Project'),
-                                'url': reverse('project_detail', kwargs={'project': p_id}),
-                                'snippet': highlight_snippet(content_snippet, query)
-                            })
-
-                epics_dir = os.path.join(projects_dir, p_id, 'epics')
-                if not os.path.exists(epics_dir):
-                    continue
-
-                for e_id in os.listdir(epics_dir):
-                    e_path = os.path.join(epics_dir, f'{e_id}.md')
-                    if not os.path.isfile(e_path):
-                        continue
-                    e_meta, _ = load_epic(p_id, e_id, metadata_only=True)
-                    if e_meta is None:
-                        continue
-                    e_title = e_meta.get('title', '').lower()
-                    snippet = ''
-                    if q in e_title:
-                        snippet = f"Title: {e_meta.get('title', 'Untitled Epic')}"
-                        key = ('epic', e_id)
-                        if key not in seen:
-                            seen.add(key)
-                            results.append({
-                                'type': 'epic',
-                                'title': e_meta.get('title', 'Untitled Epic'),
-                                'seq_id': e_meta.get('seq_id', ''),
-                                'url': reverse('epic_detail', kwargs={'project': p_id, 'epic': e_id}),
-                                'snippet': highlight_snippet(snippet, query)
-                            })
-                    else:
-                        _, e_content = load_epic(p_id, e_id, metadata_only=False)
-                        content_snippet = get_match_snippet(e_content or '', query)
-                        if q in (e_content or '').lower():
-                            key = ('epic', e_id)
-                            if key not in seen:
-                                seen.add(key)
-                                results.append({
-                                    'type': 'epic',
-                                    'title': e_meta.get('title', 'Untitled Epic'),
-                                    'seq_id': e_meta.get('seq_id', ''),
-                                    'url': reverse('epic_detail', kwargs={'project': p_id, 'epic': e_id}),
-                                    'snippet': highlight_snippet(content_snippet, query)
-                                })
-
-                    tasks_dir = os.path.join(epics_dir, e_id, 'tasks')
-                    if not os.path.exists(tasks_dir):
-                        continue
-
-                    for t_filename in os.listdir(tasks_dir):
-                        if not t_filename.endswith('.md'):
-                            continue
-                        t_id = t_filename[:-3]
-                        t_meta, _ = load_task(p_id, e_id, t_id, metadata_only=True)
-                        if t_meta is None:
-                            continue
-                        updates_text = ' '.join([u.get('content', '') for u in t_meta.get('updates', [])])
-                        haystack = (t_meta.get('title', '') + ' ' + updates_text).lower()
-                        snippet = ''
-                        if q in haystack:
-                            if q in t_meta.get('title', '').lower():
-                                snippet = f"Title: {t_meta.get('title', 'Untitled Task')}"
-                            else:
-                                snippet = get_match_snippet(updates_text, query)
-                            key = ('task', t_id)
-                            if key not in seen:
-                                seen.add(key)
-                                results.append({
-                                    'type': 'task',
-                                    'title': t_meta.get('title', 'Untitled Task'),
-                                    'seq_id': t_meta.get('seq_id', ''),
-                                    'url': reverse('task_detail', kwargs={'project': p_id, 'epic': e_id, 'task': t_id}),
-                                    'snippet': highlight_snippet(snippet, query)
-                                })
-                        else:
-                            _, t_content = load_task(p_id, e_id, t_id, metadata_only=False)
-                            content_snippet = get_match_snippet(t_content or '', query)
-                            if q in (t_content or '').lower():
-                                key = ('task', t_id)
-                                if key not in seen:
-                                    seen.add(key)
-                                    results.append({
-                                        'type': 'task',
-                                        'title': t_meta.get('title', 'Untitled Task'),
-                                        'seq_id': t_meta.get('seq_id', ''),
-                                        'url': reverse('task_detail', kwargs={'project': p_id, 'epic': e_id, 'task': t_id}),
-                                        'snippet': highlight_snippet(content_snippet, query)
-                                    })
-
-                        subtasks_dir = os.path.join(tasks_dir, t_id, 'subtasks')
-                        if not os.path.exists(subtasks_dir):
-                            continue
-
-                        for s_filename in os.listdir(subtasks_dir):
-                            if not s_filename.endswith('.md'):
-                                continue
-                            s_id = s_filename[:-3]
-                            s_meta, _ = load_subtask(p_id, e_id, t_id, s_id, metadata_only=True)
-                            if s_meta is None:
-                                continue
-                            s_updates_text = ' '.join([u.get('content', '') for u in s_meta.get('updates', [])])
-                            s_haystack = (s_meta.get('title', '') + ' ' + s_updates_text).lower()
-                            snippet = ''
-                            if q in s_haystack:
-                                if q in s_meta.get('title', '').lower():
-                                    snippet = f"Title: {s_meta.get('title', 'Untitled Subtask')}"
-                                else:
-                                    snippet = get_match_snippet(s_updates_text, query)
-                                key = ('subtask', s_id)
-                                if key not in seen:
-                                    seen.add(key)
-                                    results.append({
-                                    'type': 'subtask',
-                                    'seq_id': s_meta.get('seq_id', ''),
-                                    'title': s_meta.get('title', 'Untitled Subtask'),
-                                        'url': reverse('subtask_detail', kwargs={'project': p_id, 'epic': e_id, 'task': t_id, 'subtask': s_id}),
-                                        'snippet': highlight_snippet(snippet, query)
-                                    })
-                            else:
-                                _, s_content = load_subtask(p_id, e_id, t_id, s_id, metadata_only=False)
-                                content_snippet = get_match_snippet(s_content or '', query)
-                                if q in (s_content or '').lower():
-                                    key = ('subtask', s_id)
-                                    if key not in seen:
-                                        seen.add(key)
-                                        results.append({
-                                        'type': 'subtask',
-                                        'seq_id': s_meta.get('seq_id', ''),
-                                        'title': s_meta.get('title', 'Untitled Subtask'),
-                                            'url': reverse('subtask_detail', kwargs={'project': p_id, 'epic': e_id, 'task': t_id, 'subtask': s_id}),
-                                            'snippet': highlight_snippet(content_snippet, query)
-                                        })
-
-        # Search notes
-        notes_dir = safe_join_path('notes')
-        if os.path.exists(notes_dir):
-            try:
-                filenames = [f for f in os.listdir(notes_dir) if f.endswith('.md')]
-                for filename in filenames:
-                    note_id = filename[:-3]
-                    n_meta, n_content = load_note(note_id)
-                    if n_meta is None:
-                        continue
-                    
-                    key = ('note', note_id)
-                    if key in seen:
-                        continue
-                    
-                    snippet = ''
-                    matched = False
-                    
-                    # Search in title
-                    title_text = n_meta.get('title', '').lower()
-                    if q in title_text:
-                        snippet = f"Title: {n_meta.get('title', 'Untitled Note')}"
-                        matched = True
-                    
-                    # Search in content
-                    if not matched and n_content:
-                        content_lower = n_content.lower()
-                        if q in content_lower:
-                            snippet = get_match_snippet(n_content, query)
-                            matched = True
-                    
-                    # Search in people tags
-                    if not matched:
-                        people_tags = n_meta.get('people', [])
-                        matching_people = [p for p in people_tags if q in p.lower()]
-                        if matching_people:
-                            snippet = f"People: {', '.join(matching_people)}"
-                            matched = True
-                    
-                    # Search in labels
-                    if not matched:
-                        labels = n_meta.get('labels', [])
-                        matching_labels = [l for l in labels if q in l.lower()]
-                        if matching_labels:
-                            snippet = f"Labels: {', '.join(matching_labels)}"
-                            matched = True
-                    
-                    if matched:
-                        seen.add(key)
-                        results.append({
-                            'type': 'note',
-                            'title': n_meta.get('title', 'Untitled Note'),
-                            'url': reverse('note_detail', kwargs={'note_id': note_id}),
-                            'snippet': highlight_snippet(snippet, query)
-                        })
-            except OSError as e:
-                logger.error(f"Error searching notes: {e}")
-
+            logger.error(f"FTS5 search failed: {e}")
+            # FTS5 should always work since we're using SQLite as primary storage
+            # If it fails, return empty results rather than falling back to file search
+    
+    # Return results (empty if FTS5 failed or no query)
     return render(request, 'pm/search.html', {
         'query': query,
         'results': results,
@@ -4093,62 +3946,56 @@ def search_view(request):
 
 def notes_list(request):
     """Display list of all notes."""
-    notes_dir = safe_join_path('notes')
-    os.makedirs(notes_dir, exist_ok=True)
-    
     notes = []
-    try:
-        filenames = [f for f in os.listdir(notes_dir) if f.endswith('.md')]
-        for filename in sorted(filenames, reverse=True):
-            note_id = filename[:-3]
-            metadata, content = load_note(note_id)
-            if metadata is not None:
-                # Convert people names to objects with IDs
-                people_list = normalize_people(metadata.get('people', []))
-                people_with_ids = []
-                for p_name in people_list:
-                    # Check if this is actually a person ID (person- (7) + 8 hex = 15 chars)
-                    if p_name.startswith('person-') and len(p_name) == 15:
-                        # This is a person ID, not a name - load the person to get the actual name
-                        person_id = p_name
+    note_entities = Entity.objects.filter(type='note').order_by('-updated', '-created')
+    
+    for entity in note_entities:
+        metadata, content = load_note(entity.id)
+        if metadata is not None:
+            # Convert people names to objects with IDs
+            people_list = normalize_people(metadata.get('people', []))
+            people_with_ids = []
+            for p_name in people_list:
+                # Check if this is actually a person ID (person- (7) + 8 hex = 15 chars)
+                if p_name.startswith('person-') and len(p_name) == 15:
+                    # This is a person ID, not a name - load the person to get the actual name
+                    person_id = p_name
+                    person_meta, _ = load_person(person_id, metadata_only=True)
+                    if person_meta:
+                        actual_name = person_meta.get('name', '').strip()
+                        if actual_name and actual_name != person_id:
+                            p_name = actual_name
+                        else:
+                            # Person file exists but has no valid name, skip it
+                            continue
+                    else:
+                        # Person ID does not exist, skip it
+                        continue
+                else:
+                    # This is a name, find the person ID
+                    person_id = find_person_by_name(p_name)
+                    if person_id:
+                        # Load person to get their actual name (in case it changed)
                         person_meta, _ = load_person(person_id, metadata_only=True)
                         if person_meta:
                             actual_name = person_meta.get('name', '').strip()
                             if actual_name and actual_name != person_id:
                                 p_name = actual_name
-                            else:
-                                # Person file exists but has no valid name, skip it
-                                continue
-                        else:
-                            # Person ID does not exist, skip it
-                            continue
-                    else:
-                        # This is a name, find the person ID
-                        person_id = find_person_by_name(p_name)
-                        if person_id:
-                            # Load person to get their actual name (in case it changed)
-                            person_meta, _ = load_person(person_id, metadata_only=True)
-                            if person_meta:
-                                actual_name = person_meta.get('name', '').strip()
-                                if actual_name and actual_name != person_id:
-                                    p_name = actual_name
-                    
-                    people_with_ids.append({
-                        'name': p_name,
-                        'id': person_id if person_id else None
-                    })
                 
-                notes.append({
-                    'id': note_id,
-                    'title': metadata.get('title', 'Untitled Note'),
-                    'created': metadata.get('created', ''),
-                    'updated': metadata.get('updated', ''),
-                    'people': people_with_ids,
-                    'labels': metadata.get('labels', []),
-                    'preview': content[:200] if content else ''
+                people_with_ids.append({
+                    'name': p_name,
+                    'id': person_id if person_id else None
                 })
-    except OSError as e:
-        logger.error(f"Error reading notes directory: {e}")
+            
+            notes.append({
+                'id': entity.id,
+                'title': metadata.get('title', 'Untitled Note'),
+                'created': metadata.get('created', ''),
+                'updated': metadata.get('updated', ''),
+                'people': people_with_ids,
+                'labels': metadata.get('labels', []),
+                'preview': content[:200] if content else ''
+            })
     
     return render(request, 'pm/notes_list.html', {
         'notes': notes
@@ -4173,113 +4020,116 @@ def find_person_references(person_id):
     person_name = person_meta.get('name', '')
     person_normalized = person_name.strip().lstrip('@')
     
-    # Scan projects
-    projects_dir = safe_join_path('projects')
-    if os.path.exists(projects_dir):
-        try:
-            for p_id in os.listdir(projects_dir):
-                p_dir = os.path.join(projects_dir, p_id)
-                if not os.path.isdir(p_dir):
-                    continue
-                p_meta, _ = load_project(p_id, metadata_only=True)
-                if p_meta:
-                    people = normalize_people(p_meta.get('people', []))
-                    if person_normalized in people:
-                        references['projects'].append({
-                            'id': p_id,
-                            'title': p_meta.get('title', 'Untitled Project'),
-                            'url': reverse('project_detail', kwargs={'project': p_id})
-                        })
-                
-                # Scan epics
-                epics_dir = os.path.join(p_dir, 'epics')
-                if os.path.exists(epics_dir):
-                    for e_file in os.listdir(epics_dir):
-                        if not e_file.endswith('.md'):
-                            continue
-                        epic_id = e_file[:-3]
-                        e_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                        if e_meta:
-                            people = normalize_people(e_meta.get('people', []))
-                            if person_normalized in people:
-                                references['epics'].append({
-                                    'id': epic_id,
-                                    'seq_id': e_meta.get('seq_id', ''),
-                                    'title': e_meta.get('title', 'Untitled Epic'),
-                                    'project_id': p_id,
-                                    'project_title': p_meta.get('title', 'Untitled Project') if p_meta else 'Untitled Project',
-                                    'url': reverse('epic_detail', kwargs={'project': p_id, 'epic': epic_id})
-                                })
-                        
-                        # Scan tasks
-                        tasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks')
-                        if os.path.exists(tasks_dir):
-                            for t_file in os.listdir(tasks_dir):
-                                if not t_file.endswith('.md'):
-                                    continue
-                                task_id = t_file[:-3]
-                                t_meta, _ = load_task(p_id, epic_id, task_id, metadata_only=True)
-                                if t_meta:
-                                    people = normalize_people(t_meta.get('people', []))
-                                    if person_normalized in people:
-                                        references['tasks'].append({
-                                            'id': task_id,
-                                            'seq_id': t_meta.get('seq_id', ''),
-                                            'title': t_meta.get('title', 'Untitled Task'),
-                                            'project_id': p_id,
-                                            'epic_id': epic_id,
-                                            'epic_title': e_meta.get('title', 'Untitled Epic') if e_meta else 'Untitled Epic',
-                                            'project_title': p_meta.get('title', 'Untitled Project') if p_meta else 'Untitled Project',
-                                            'url': reverse('task_detail', kwargs={'project': p_id, 'epic': epic_id, 'task': task_id})
-                                        })
-                                    
-                                    # Scan subtasks
-                                    subtasks_dir = safe_join_path('projects', p_id, 'epics', epic_id, 'tasks', task_id, 'subtasks')
-                                    if os.path.exists(subtasks_dir):
-                                        for s_file in os.listdir(subtasks_dir):
-                                            if not s_file.endswith('.md'):
-                                                continue
-                                            subtask_id = s_file[:-3]
-                                            s_meta, _ = load_subtask(p_id, epic_id, task_id, subtask_id, metadata_only=True)
-                                            if s_meta:
-                                                people = normalize_people(s_meta.get('people', []))
-                                                if person_normalized in people:
-                                                    references['subtasks'].append({
-                                                        'id': subtask_id,
-                                                        'seq_id': s_meta.get('seq_id', ''),
-                                                        'title': s_meta.get('title', 'Untitled Subtask'),
-                                                        'project_id': p_id,
-                                                        'epic_id': epic_id,
-                                                        'task_id': task_id,
-                                                        'task_title': t_meta.get('title', 'Untitled Task'),
-                                                        'epic_title': e_meta.get('title', 'Untitled Epic') if e_meta else 'Untitled Epic',
-                                                        'project_title': p_meta.get('title', 'Untitled Project') if p_meta else 'Untitled Project',
-                                                        'url': reverse('subtask_detail', kwargs={'project': p_id, 'epic': epic_id, 'task': task_id, 'subtask': subtask_id})
-                                                    })
-        except OSError as e:
-            logger.error(f"Error scanning projects for person references: {e}")
+    # Query all entities that might reference this person
+    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask', 'note'])
     
-    # Scan notes
-    notes_dir = safe_join_path('notes')
-    if os.path.exists(notes_dir):
-        try:
-            for n_file in os.listdir(notes_dir):
-                if not n_file.endswith('.md'):
-                    continue
-                note_id = n_file[:-3]
-                n_meta, _ = load_note(note_id)
-                if n_meta:
-                    people = normalize_people(n_meta.get('people', []))
-                    if person_normalized in people:
-                        references['notes'].append({
-                            'id': note_id,
-                            'title': n_meta.get('title', 'Untitled Note'),
-                            'created': n_meta.get('created', ''),
-                            'updated': n_meta.get('updated', ''),
-                            'url': reverse('note_detail', kwargs={'note_id': note_id})
-                        })
-        except OSError as e:
-            logger.error(f"Error scanning notes for person references: {e}")
+    for entity in entities:
+        # Get people from EntityPerson relationships
+        entity_people = [ep.person.name for ep in entity.assigned_people.all()]
+        people = normalize_people(entity_people)
+        if person_normalized in people:
+            if entity.type == 'project':
+                references['projects'].append({
+                    'id': entity.id,
+                    'title': entity.title or 'Untitled Project',
+                    'url': reverse('project_detail', kwargs={'project': entity.id})
+                })
+            elif entity.type == 'epic':
+                # Get project title
+                try:
+                    project = Entity.objects.get(id=entity.project_id, type='project')
+                    project_title = project.title or 'Untitled Project'
+                except Entity.DoesNotExist:
+                    project_title = 'Untitled Project'
+                
+                references['epics'].append({
+                    'id': entity.id,
+                    'seq_id': entity.seq_id or '',
+                    'title': entity.title or 'Untitled Epic',
+                    'project_id': entity.project_id,
+                    'project_title': project_title,
+                    'url': reverse('epic_detail', kwargs={'project': entity.project_id, 'epic': entity.id})
+                })
+            elif entity.type == 'task':
+                # Get project and epic titles
+                try:
+                    project = Entity.objects.get(id=entity.project_id, type='project')
+                    project_title = project.title or 'Untitled Project'
+                except Entity.DoesNotExist:
+                    project_title = 'Untitled Project'
+                
+                epic_title = None
+                if entity.epic_id:
+                    try:
+                        epic = Entity.objects.get(id=entity.epic_id, type='epic')
+                        epic_title = epic.title or 'Untitled Epic'
+                    except Entity.DoesNotExist:
+                        pass
+                
+                if entity.epic_id:
+                    url = reverse('task_detail', kwargs={'project': entity.project_id, 'epic': entity.epic_id, 'task': entity.id})
+                else:
+                    url = reverse('task_detail_no_epic', kwargs={'project': entity.project_id, 'task': entity.id})
+                
+                references['tasks'].append({
+                    'id': entity.id,
+                    'seq_id': entity.seq_id or '',
+                    'title': entity.title or 'Untitled Task',
+                    'project_id': entity.project_id,
+                    'epic_id': entity.epic_id,
+                    'epic_title': epic_title,
+                    'project_title': project_title,
+                    'url': url
+                })
+            elif entity.type == 'subtask':
+                # Get project, epic, and task titles
+                try:
+                    project = Entity.objects.get(id=entity.project_id, type='project')
+                    project_title = project.title or 'Untitled Project'
+                except Entity.DoesNotExist:
+                    project_title = 'Untitled Project'
+                
+                epic_title = None
+                if entity.epic_id:
+                    try:
+                        epic = Entity.objects.get(id=entity.epic_id, type='epic')
+                        epic_title = epic.title or 'Untitled Epic'
+                    except Entity.DoesNotExist:
+                        pass
+                
+                task_title = None
+                if entity.task_id:
+                    try:
+                        task = Entity.objects.get(id=entity.task_id, type='task')
+                        task_title = task.title or 'Untitled Task'
+                    except Entity.DoesNotExist:
+                        pass
+                
+                if entity.epic_id:
+                    url = reverse('subtask_detail', kwargs={'project': entity.project_id, 'epic': entity.epic_id, 'task': entity.task_id, 'subtask': entity.id})
+                else:
+                    url = reverse('subtask_detail_no_epic', kwargs={'project': entity.project_id, 'task': entity.task_id, 'subtask': entity.id})
+                
+                references['subtasks'].append({
+                    'id': entity.id,
+                    'seq_id': entity.seq_id or '',
+                    'title': entity.title or 'Untitled Subtask',
+                    'project_id': entity.project_id,
+                    'epic_id': entity.epic_id,
+                    'task_id': entity.task_id,
+                    'task_title': task_title,
+                    'epic_title': epic_title,
+                    'project_title': project_title,
+                    'url': url
+                })
+            elif entity.type == 'note':
+                references['notes'].append({
+                    'id': entity.id,
+                    'title': entity.title or 'Untitled Note',
+                    'created': entity.created or '',
+                    'updated': entity.updated or '',
+                    'url': reverse('note_detail', kwargs={'note_id': entity.id})
+                })
     
     return references
 
@@ -4348,49 +4198,6 @@ def person_detail(request, person_id):
     if person_metadata is None:
         raise Http404("Person not found")
     
-    edit_mode = request.GET.get('edit', 'false') == 'true'
-    
-    # Handle POST requests for editing
-    if request.method == 'POST':
-        new_name = request.POST.get('name', '').strip().lstrip('@')
-        job_title = request.POST.get('job_title', '').strip()
-        company = request.POST.get('company', '').strip()
-        email = request.POST.get('email', '').strip()
-        phone = request.POST.get('phone', '').strip()
-        
-        # Update metadata (keep same person_id)
-        person_metadata['name'] = new_name
-        if job_title:
-            person_metadata['job_title'] = job_title
-        elif 'job_title' in person_metadata:
-            del person_metadata['job_title']
-            
-        if company:
-            person_metadata['company'] = company
-        elif 'company' in person_metadata:
-            del person_metadata['company']
-            
-        if email:
-            person_metadata['email'] = email
-        elif 'email' in person_metadata:
-            del person_metadata['email']
-            
-        if phone:
-            person_metadata['phone'] = phone
-        elif 'phone' in person_metadata:
-            del person_metadata['phone']
-        
-        # Ensure created date exists
-        if 'created' not in person_metadata:
-            person_metadata['created'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        
-        # Save with same person_id (name can change, ID stays the same)
-        save_person(person_id, person_metadata, person_content or '')
-        # Invalidate cache
-        cache.delete("all_people:v3")
-        
-        return redirect('person_detail', person_id=person_id)
-    
     # Find all references
     references = find_person_references(person_id)
     
@@ -4414,30 +4221,49 @@ def person_detail(request, person_id):
         'tasks': references['tasks'],
         'subtasks': references['subtasks'],
         'notes': references['notes'],
-        'total_refs': total_refs,
-        'edit_mode': edit_mode
+        'total_refs': total_refs
     })
 
 
 def load_note(note_id, metadata_only=False):
-    """Load a note from disk."""
-    # Basic validation - ensure note_id is safe filename
+    """Load a note from database."""
+    # Basic validation - ensure note_id is safe
     if not note_id or '/' in note_id or '..' in note_id:
         return None, None
-    note_path = safe_join_path('notes', f'{note_id}.md')
-    return sync_manager.load_entity_with_index(
-        note_path, note_id, 'note', 
-        'Untitled Note', 'active', metadata_only=metadata_only
-    )
+    
+    try:
+        entity = Entity.objects.select_related('status_fk').get(id=note_id, type='note')
+        # Build metadata from Entity fields
+        metadata = _build_metadata_from_entity(entity)
+        metadata = _merge_people_from_entityperson(entity, metadata)
+        metadata['status_display'] = entity.status_fk.display_name if entity.status_fk else _status_display_fallback(metadata.get('status') or entity.status)
+        content = entity.content if not metadata_only else None
+        return metadata, content
+    except Entity.DoesNotExist:
+        return None, None
 
 
 def save_note(note_id, metadata, content):
-    """Save a note to disk."""
-    # Basic validation - ensure note_id is safe filename
+    """Save a note to database."""
+    # Basic validation - ensure note_id is safe
     if not note_id or '/' in note_id or '..' in note_id:
         raise Http404("Invalid note ID")
-    note_path = safe_join_path('notes', f'{note_id}.md')
-    sync_manager.save_entity_with_sync(note_path, note_id, 'note', metadata, content)
+    
+    # Extract updates text, people tags, labels for search
+    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
+    people_tags = metadata.get('people', [])
+    labels = metadata.get('labels', [])
+    
+    # Save to database and sync search index
+    index_storage.sync_entity(
+        entity_id=note_id,
+        entity_type='note',
+        metadata=metadata,
+        content=content or '',
+        updates_text=updates_text,
+        people_tags=people_tags,
+        labels=labels
+    )
 
 
 def note_detail(request, note_id):
@@ -4445,8 +4271,6 @@ def note_detail(request, note_id):
     metadata, content = load_note(note_id)
     if metadata is None:
         raise Http404("Note not found")
-    
-    edit_mode = request.GET.get('edit', 'false') == 'true'
     
     # Handle quick updates for linking entities
     if request.method == 'POST' and 'quick_update' in request.POST:
@@ -4503,13 +4327,13 @@ def note_detail(request, note_id):
             epic_id = request.POST.get('epic_id', '').strip()
             task_id = request.POST.get('task_id', '').strip()
             if project_id and epic_id and task_id and is_valid_project_id(project_id) and validate_id(epic_id, 'epic') and validate_id(task_id, 'task'):
-                t_meta, t_content = load_task(project_id, epic_id, task_id)
+                t_meta, t_content = load_task(project_id, task_id, epic_id=epic_id)
                 if t_meta:
                     notes_list = t_meta.get('notes', [])
                     if note_id not in notes_list:
                         notes_list.append(note_id)
                         t_meta['notes'] = notes_list
-                        save_task(project_id, epic_id, task_id, t_meta, t_content)
+                        save_task(project_id, task_id, t_meta, t_content, epic_id=epic_id)
             return redirect('note_detail', note_id=note_id)
         
         elif quick_update == 'unlink_task':
@@ -4517,11 +4341,11 @@ def note_detail(request, note_id):
             epic_id = request.POST.get('epic_id', '').strip()
             task_id = request.POST.get('task_id', '').strip()
             if project_id and epic_id and task_id and is_valid_project_id(project_id) and validate_id(epic_id, 'epic') and validate_id(task_id, 'task'):
-                t_meta, t_content = load_task(project_id, epic_id, task_id)
+                t_meta, t_content = load_task(project_id, task_id, epic_id=epic_id)
                 if t_meta:
                     notes_list = t_meta.get('notes', [])
                     t_meta['notes'] = [n for n in notes_list if n != note_id]
-                    save_task(project_id, epic_id, task_id, t_meta, t_content)
+                    save_task(project_id, task_id, t_meta, t_content, epic_id=epic_id)
             return redirect('note_detail', note_id=note_id)
         
         elif quick_update == 'link_subtask':
@@ -4530,13 +4354,13 @@ def note_detail(request, note_id):
             task_id = request.POST.get('task_id', '').strip()
             subtask_id = request.POST.get('subtask_id', '').strip()
             if project_id and epic_id and task_id and subtask_id and is_valid_project_id(project_id) and validate_id(epic_id, 'epic') and validate_id(task_id, 'task') and validate_id(subtask_id, 'subtask'):
-                s_meta, s_content = load_subtask(project_id, epic_id, task_id, subtask_id)
+                s_meta, s_content = load_subtask(project_id, task_id, subtask_id, epic_id=epic_id)
                 if s_meta:
                     notes_list = s_meta.get('notes', [])
                     if note_id not in notes_list:
                         notes_list.append(note_id)
                         s_meta['notes'] = notes_list
-                        save_subtask(project_id, epic_id, task_id, subtask_id, s_meta, s_content)
+                        save_subtask(project_id, task_id, subtask_id, s_meta, s_content, epic_id=epic_id)
             return redirect('note_detail', note_id=note_id)
         
         elif quick_update == 'unlink_subtask':
@@ -4545,11 +4369,11 @@ def note_detail(request, note_id):
             task_id = request.POST.get('task_id', '').strip()
             subtask_id = request.POST.get('subtask_id', '').strip()
             if project_id and epic_id and task_id and subtask_id and is_valid_project_id(project_id) and validate_id(epic_id, 'epic') and validate_id(task_id, 'task') and validate_id(subtask_id, 'subtask'):
-                s_meta, s_content = load_subtask(project_id, epic_id, task_id, subtask_id)
+                s_meta, s_content = load_subtask(project_id, task_id, subtask_id, epic_id=epic_id)
                 if s_meta:
                     notes_list = s_meta.get('notes', [])
                     s_meta['notes'] = [n for n in notes_list if n != note_id]
-                    save_subtask(project_id, epic_id, task_id, subtask_id, s_meta, s_content)
+                    save_subtask(project_id, task_id, subtask_id, s_meta, s_content, epic_id=epic_id)
             return redirect('note_detail', note_id=note_id)
         elif quick_update == 'add_label':
             label = request.POST.get('label', '').strip()
@@ -4572,12 +4396,13 @@ def note_detail(request, note_id):
         elif quick_update == 'add_person':
             person = request.POST.get('person', '').strip()
             if person:
+                # Ensure person exists (create if needed)
+                person_normalized = ensure_person_exists(person)
                 people_list = normalize_people(metadata.get('people', []))
-                if person not in people_list:
-                    people_list.append(person)
+                if person_normalized not in people_list:
+                    people_list.append(person_normalized)
                     metadata['people'] = people_list
                     save_note(note_id, metadata, content)
-                    cache.delete("all_people:v1")  # Invalidate cache
             return redirect('note_detail', note_id=note_id)
         elif quick_update == 'remove_person':
             person = request.POST.get('person', '').strip()
@@ -4650,64 +4475,42 @@ def note_detail(request, note_id):
                     save_note(note_id, metadata, content)
             return redirect('note_detail', note_id=note_id)
         elif quick_update == 'create_task_from_note':
-            # Create a new task in an epic (from note or existing)
+            # Create a new task (with or without epic)
             title = request.POST.get('title', 'New Task').strip()
-            epic_id = request.POST.get('epic_id', '').strip()
+            epic_id = request.POST.get('epic_id', '').strip() or None
             project_id = metadata.get('note_project_id', '').strip()
             
-            if title and epic_id and project_id and validate_id(project_id, 'project') and validate_id(epic_id, 'epic'):
-                # Verify epic exists and belongs to project
-                e_meta, _ = load_epic(project_id, epic_id, metadata_only=True)
-                if e_meta:
-                    task_id = f'task-{uuid.uuid4().hex[:8]}'
-                    seq_id = get_next_seq_id(project_id, 'task')
-                    priority = request.POST.get('priority', '').strip() or '3'
-                    status = request.POST.get('status', 'todo')
-                    task_metadata = {
-                        'title': title,
-                        'status': status,
-                        'seq_id': seq_id,
-                        'priority': priority,
-                        'created': datetime.now().strftime('%Y-%m-%d'),
-                        'notes': [note_id]  # Link note to task
-                    }
-                    save_task(project_id, epic_id, task_id, task_metadata, '')
-                    # Track tasks created in this note
-                    note_tasks = metadata.get('note_tasks', [])
-                    if task_id not in note_tasks:
-                        note_tasks.append(task_id)
-                    metadata['note_tasks'] = note_tasks
-                    save_note(note_id, metadata, content)
+            if title and project_id and is_valid_project_id(project_id):
+                # If epic_id provided, validate it
+                if epic_id and not validate_id(epic_id, 'epic'):
+                    epic_id = None
+                
+                # If epic_id provided, verify epic exists and belongs to project
+                if epic_id:
+                    e_meta, _ = load_epic(project_id, epic_id, metadata_only=True)
+                    if not e_meta:
+                        epic_id = None
+                
+                task_id = f'task-{uuid.uuid4().hex[:8]}'
+                seq_id = get_next_seq_id(project_id, 'task')
+                priority = request.POST.get('priority', '').strip() or '3'
+                status = request.POST.get('status', 'todo')
+                task_metadata = {
+                    'title': title,
+                    'status': status,
+                    'seq_id': seq_id,
+                    'priority': priority,
+                    'created': datetime.now().strftime('%Y-%m-%d'),
+                    'notes': [note_id]  # Link note to task
+                }
+                save_task(project_id, task_id, task_metadata, '', epic_id=epic_id)
+                # Track tasks created in this note
+                note_tasks = metadata.get('note_tasks', [])
+                if task_id not in note_tasks:
+                    note_tasks.append(task_id)
+                metadata['note_tasks'] = note_tasks
+                save_note(note_id, metadata, content)
             return redirect('note_detail', note_id=note_id)
-    
-    if request.method == 'POST':
-        metadata['title'] = request.POST.get('title', metadata.get('title', 'Untitled Note'))
-        metadata['updated'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        
-        labels = normalize_labels(request.POST.get('labels', ''))
-        old_labels = set(normalize_labels(metadata.get('labels', [])))
-        if labels:
-            metadata['labels'] = labels
-            # Invalidate cache if new labels were added
-            if set(labels) - old_labels:
-                cache.delete("all_labels:v1")
-        else:
-            metadata.pop('labels', None)
-        
-        people = normalize_people(request.POST.get('people', ''))
-        old_people = set(normalize_people(metadata.get('people', [])))
-        if people:
-            metadata['people'] = people
-            # Invalidate cache if new people were added
-            if set(people) - old_people:
-                cache.delete("all_people:v1")
-        else:
-            metadata.pop('people', None)
-        
-        content = request.POST.get('content', content)
-        
-        save_note(note_id, metadata, content)
-        return redirect('note_detail', note_id=note_id)
     
     labels_list = normalize_labels(metadata.get('labels', []))
     labels_with_colors = [{'name': l, 'color': label_color(l)} for l in labels_list]
@@ -4798,22 +4601,13 @@ def note_detail(request, note_id):
     # Get all epics from the note project (for task creation dropdown)
     project_epics = []
     if note_project_id:
-        epics_dir = safe_join_path('projects', note_project_id, 'epics')
-        if os.path.exists(epics_dir):
-            try:
-                for e_file in os.listdir(epics_dir):
-                    if not e_file.endswith('.md'):
-                        continue
-                    epic_id = e_file[:-3]
-                    e_meta, _ = load_epic(note_project_id, epic_id, metadata_only=True)
-                    if e_meta:
-                        project_epics.append({
-                            'id': epic_id,
-                            'title': e_meta.get('title', 'Untitled Epic'),
-                            'seq_id': e_meta.get('seq_id', '')
-                        })
-            except OSError:
-                pass
+        epics = Entity.objects.filter(type='epic', project_id=note_project_id)
+        for epic in epics:
+            project_epics.append({
+                'id': epic.id,
+                'title': epic.title or 'Untitled Epic',
+                'seq_id': epic.seq_id or ''
+            })
         project_epics.sort(key=lambda x: (x.get('seq_id', ''), x.get('title', '')))
     
     # Get tasks created in this note
@@ -4822,22 +4616,28 @@ def note_detail(request, note_id):
     if note_project_id:
         for task_id in note_task_ids:
             if validate_id(task_id, 'task'):
-                # Find which epic this task belongs to
-                for epic in project_epics:
-                    tasks_dir = safe_join_path('projects', note_project_id, 'epics', epic['id'], 'tasks')
-                    if os.path.exists(tasks_dir):
-                        for t_file in os.listdir(tasks_dir):
-                            if t_file[:-3] == task_id:
-                                t_meta, _ = load_task(note_project_id, epic['id'], task_id, metadata_only=True)
-                                if t_meta:
-                                    note_tasks.append({
-                                        'id': task_id,
-                                        'epic_id': epic['id'],
-                                        'epic_title': epic['title'],
-                                        'title': t_meta.get('title', 'Untitled Task'),
-                                        'seq_id': t_meta.get('seq_id', '')
-                                    })
-                                break
+                try:
+                    task = Entity.objects.get(id=task_id, type='task', project_id=note_project_id)
+                    # Find epic title
+                    epic_title = 'Untitled Epic'
+                    if task.epic_id:
+                        try:
+                            epic = Entity.objects.get(id=task.epic_id, type='epic')
+                            epic_title = epic.title or 'Untitled Epic'
+                        except Entity.DoesNotExist:
+                            pass
+                    
+                    note_tasks.append({
+                        'id': task_id,
+                        'epic_id': task.epic_id,
+                        'epic_title': epic_title,
+                        'title': task.title or 'Untitled Task',
+                        'seq_id': task.seq_id or ''
+                    })
+                except Entity.DoesNotExist:
+                    pass
+                except Entity.DoesNotExist:
+                    pass
     
     return render(request, 'pm/note_detail.html', {
         'metadata': metadata,
@@ -4849,7 +4649,6 @@ def note_detail(request, note_id):
         'people_names': people_names,
         'all_labels': all_labels,
         'all_people': all_people,  # This is now get_all_people_names_in_system() result
-        'edit_mode': edit_mode,
         'backlinks': backlinks,
         'available_projects': available_projects,
         'available_epics': available_epics,
@@ -4879,7 +4678,8 @@ def new_note(request):
         if labels:
             metadata['labels'] = labels
         if people:
-            metadata['people'] = people
+            # Ensure all people exist (create if needed)
+            metadata['people'] = ensure_people_exist(people)
         
         save_note(note_id, metadata, content)
         return redirect('note_detail', note_id=note_id)
@@ -4893,9 +4693,12 @@ def delete_note(request, note_id):
         # Basic validation
         if not note_id or '/' in note_id or '..' in note_id:
             raise Http404("Invalid note ID")
-        note_path = safe_join_path('notes', f'{note_id}.md')
-        if os.path.exists(note_path):
-            os.remove(note_path)
+        # Delete note from database
+        try:
+            note = Entity.objects.get(id=note_id, type='note')
+            note.delete()
+        except Entity.DoesNotExist:
+            pass
         return redirect('notes_list')
     raise Http404("Invalid request")
 
@@ -5080,22 +4883,13 @@ def get_all_projects_for_dropdown():
     """Get all active projects for dropdown selection."""
     projects_dir = safe_join_path('projects')
     projects = []
-    if os.path.exists(projects_dir):
-        try:
-            filenames = [f for f in os.listdir(projects_dir) if f.endswith('.md')]
-            for filename in filenames:
-                project_id = filename[:-3]
-                # Skip inbox - it is the default
-                if project_id == INBOX_PROJECT_ID:
-                    continue
-                metadata, _ = load_project(project_id, metadata_only=True)
-                if metadata and not metadata.get('archived', False):
-                    projects.append({
-                        'id': project_id,
-                        'title': metadata.get('title', 'Untitled Project')
-                    })
-        except OSError:
-            pass
+    project_entities = Entity.objects.select_related('status_fk').filter(type='project').exclude(id=INBOX_PROJECT_ID)
+    for project in project_entities:
+        if not project.archived:
+            projects.append({
+                'id': project.id,
+                'title': project.title or 'Untitled Project'
+            })
     return sorted(projects, key=lambda x: x['title'].lower())
 
 
@@ -5130,7 +4924,8 @@ def quick_add(request):
         if labels:
             metadata['labels'] = labels
         if people:
-            metadata['people'] = people
+            # Ensure all people exist (create if needed)
+            metadata['people'] = ensure_people_exist(people)
         
         save_note(note_id, metadata, content)
         return JsonResponse({
@@ -5166,36 +4961,18 @@ def quick_add(request):
         if not project_meta:
             return JsonResponse({'success': False, 'error': 'Project not found'}, status=404)
         
-        # Get or create epic for the project
-        if project_id == INBOX_PROJECT_ID:
-            epic_id = get_inbox_epic()
-        else:
-            # For other projects, need to get an epic - use first active epic or create one
-            epics_dir = safe_join_path('projects', project_id, 'epics')
-            epic_id = None
-            if os.path.exists(epics_dir):
-                epic_files = [f for f in os.listdir(epics_dir) if f.endswith('.md')]
-                for epic_file in epic_files:
-                    epic_id_candidate = epic_file[:-3]
-                    epic_meta, _ = load_epic(project_id, epic_id_candidate, metadata_only=True)
-                    if epic_meta and epic_meta.get('status') == 'active':
-                        epic_id = epic_id_candidate
-                        break
-                # If no active epic found, use the first one
-                if not epic_id and epic_files:
-                    epic_id = epic_files[0][:-3]
-            
-            # If still no epic, create a default one
-            if not epic_id:
-                epic_id = f'epic-{uuid.uuid4().hex[:8]}'
-                seq_id = get_next_seq_id(project_id, 'epic')
-                epic_metadata = {
-                    'title': 'Default',
-                    'status': 'active',
-                    'seq_id': seq_id,
-                    'created': datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-                }
-                save_epic(project_id, epic_id, epic_metadata, '')
+        # Epic is optional - check if provided, otherwise create task directly under project
+        epic_id = request.POST.get('epic_id', '').strip() or None
+        
+        # If epic_id provided, validate it
+        if epic_id:
+            if not validate_id(epic_id, 'epic'):
+                epic_id = None
+            else:
+                # Verify epic exists
+                epic_meta, _ = load_epic(project_id, epic_id, metadata_only=True)
+                if not epic_meta:
+                    epic_id = None
         
         # Create the task
         task_id = f'task-{uuid.uuid4().hex[:8]}'
@@ -5212,21 +4989,77 @@ def quick_add(request):
             task_metadata['labels'] = labels
         
         add_activity_entry(task_metadata, 'created')
-        save_task(project_id, epic_id, task_id, task_metadata, content)
+        save_task(project_id, task_id, task_metadata, content, epic_id=epic_id)
+        
+        if epic_id:
+            url = reverse('task_detail', kwargs={'project': project_id, 'epic': epic_id, 'task': task_id})
+        else:
+            url = reverse('task_detail_no_epic', kwargs={'project': project_id, 'task': task_id})
         
         return JsonResponse({
             'success': True,
             'type': 'task',
             'id': task_id,
             'title': title,
-            'url': reverse('task_detail', kwargs={'project': project_id, 'epic': epic_id, 'task': task_id})
+            'url': url
         })
     
     return JsonResponse({'success': False, 'error': 'Invalid item_type'}, status=400)
 
 
+def search_persons(request):
+    """API endpoint to search persons by name."""
+    if request.method != 'GET':
+        return JsonResponse({'success': False, 'error': 'GET required'}, status=400)
+    
+    query = request.GET.get('q', '').strip().lower()
+    if not query:
+        return JsonResponse({'success': True, 'persons': []})
+    
+    # Search persons by name (case-insensitive, partial match)
+    persons = Person.objects.filter(name__icontains=query).order_by('name')[:10]
+    
+    results = []
+    for person in persons:
+        results.append({
+            'id': person.id,
+            'name': person.name,
+            'display_name': person.display_name or person.name
+        })
+    
+    return JsonResponse({'success': True, 'persons': results})
+
+
+def extract_mentions(content):
+    """Extract @mentions from content text.
+    
+    Finds patterns like @username or @username with spaces.
+    Returns a list of unique normalized person names (without @ prefix).
+    """
+    if not content:
+        return []
+    
+    # Regex pattern to match @mentions
+    # Matches @ followed by word characters, spaces, hyphens, underscores
+    # Stops at punctuation or whitespace boundaries
+    pattern = r'@([\w\s\-_]+?)(?=\s|$|[^\w\s\-_])'
+    
+    matches = re.findall(pattern, content)
+    
+    # Normalize mentions: strip whitespace, remove empty
+    mentions = []
+    seen = set()
+    for match in matches:
+        normalized = match.strip()
+        if normalized and normalized.lower() not in seen:
+            mentions.append(normalized)
+            seen.add(normalized.lower())
+    
+    return mentions
+
+
 def move_task(request, project, epic, task):
-    """Move a task from inbox to another project/epic."""
+    """Move a task to another project/epic."""
     if request.method == 'GET':
         # Return projects and epics for selection
         projects = get_all_projects_for_dropdown()
@@ -5238,18 +5071,14 @@ def move_task(request, project, epic, task):
         for p in projects:
             p_id = p['id']
             epics = []
-            epics_dir = safe_join_path('projects', p_id, 'epics')
-            if os.path.exists(epics_dir):
-                for epic_file in os.listdir(epics_dir):
-                    if epic_file.endswith('.md'):
-                        epic_id = epic_file[:-3]
-                        epic_meta, _ = load_epic(p_id, epic_id, metadata_only=True)
-                        if epic_meta and not epic_meta.get('archived', False):
-                            epics.append({
-                                'id': epic_id,
-                                'title': epic_meta.get('title', 'Untitled Epic'),
-                                'seq_id': epic_meta.get('seq_id', '')
-                            })
+            epic_entities = Entity.objects.filter(type='epic', project_id=p_id)
+            for epic in epic_entities:
+                if not epic.archived:
+                    epics.append({
+                        'id': epic.id,
+                        'title': epic.title or 'Untitled Epic',
+                        'seq_id': epic.seq_id or ''
+                    })
             projects_with_epics.append({
                 'id': p_id,
                 'title': p['title'],
@@ -5264,24 +5093,28 @@ def move_task(request, project, epic, task):
         return JsonResponse({'success': False, 'error': 'POST required'}, status=400)
     
     # Validate current task exists
-    task_metadata, task_content = load_task(project, epic, task)
+    task_metadata, task_content = load_task(project, task, epic_id=epic)
     if not task_metadata:
         return JsonResponse({'success': False, 'error': 'Task not found'}, status=404)
     
-    # Get target project and epic
+    # Get target project and epic (epic is optional)
     target_project = request.POST.get('target_project', '').strip()
-    target_epic = request.POST.get('target_epic', '').strip()
+    target_epic = request.POST.get('target_epic', '').strip() or None
     
-    if not target_project or not target_epic:
-        return JsonResponse({'success': False, 'error': 'Target project and epic required'}, status=400)
+    if not target_project:
+        return JsonResponse({'success': False, 'error': 'Target project required'}, status=400)
     
-    if not is_valid_project_id(target_project) or not validate_id(target_epic, 'epic'):
-        return JsonResponse({'success': False, 'error': 'Invalid target project or epic'}, status=400)
+    if not is_valid_project_id(target_project):
+        return JsonResponse({'success': False, 'error': 'Invalid target project'}, status=400)
     
-    # Verify target epic exists
-    target_epic_meta, _ = load_epic(target_project, target_epic, metadata_only=True)
-    if not target_epic_meta:
-        return JsonResponse({'success': False, 'error': 'Target epic not found'}, status=404)
+    # If epic provided, validate it
+    if target_epic:
+        if not validate_id(target_epic, 'epic'):
+            return JsonResponse({'success': False, 'error': 'Invalid target epic'}, status=400)
+        # Verify target epic exists
+        target_epic_meta, _ = load_epic(target_project, target_epic, metadata_only=True)
+        if not target_epic_meta:
+            return JsonResponse({'success': False, 'error': 'Target epic not found'}, status=404)
     
     # Do not allow moving to same location
     if project == target_project and epic == target_epic:
@@ -5294,26 +5127,30 @@ def move_task(request, project, epic, task):
         
         # Update project/epic references in metadata
         task_metadata['project_id'] = target_project
-        task_metadata['epic_id'] = target_epic
+        if target_epic:
+            task_metadata['epic_id'] = target_epic
+        else:
+            task_metadata.pop('epic_id', None)
         
         # Add move activity
-        old_location = f"{project}/{epic}"
-        new_location = f"{target_project}/{target_epic}"
+        old_location = f"{project}/{epic if epic else 'direct'}"
+        new_location = f"{target_project}/{target_epic if target_epic else 'direct'}"
         add_activity_entry(task_metadata, 'moved', old_location, new_location)
         
         # Load all subtasks first
-        old_subtasks_dir = safe_join_path('projects', project, 'epics', epic, 'tasks', task, 'subtasks')
         subtasks_to_move = []
-        if os.path.exists(old_subtasks_dir):
-            for subtask_file in os.listdir(old_subtasks_dir):
-                if subtask_file.endswith('.md'):
-                    subtask_id = subtask_file[:-3]
-                    subtask_meta, subtask_content = load_subtask(project, epic, task, subtask_id)
-                    if subtask_meta:
-                        subtasks_to_move.append((subtask_id, subtask_meta, subtask_content))
+        subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task)
+        if epic:
+            subtask_entities = subtask_entities.filter(epic_id=epic)
+        else:
+            subtask_entities = subtask_entities.filter(epic_id__isnull=True)
+        
+        for subtask in subtask_entities:
+            subtask_meta = _build_metadata_from_entity(subtask)
+            subtasks_to_move.append((subtask.id, subtask_meta, subtask.content))
         
         # Save task to new location
-        save_task(target_project, target_epic, task, task_metadata, task_content)
+        save_task(target_project, task, task_metadata, task_content, epic_id=target_epic)
         
         # Move all subtasks
         for subtask_id, subtask_meta, subtask_content in subtasks_to_move:
@@ -5321,92 +5158,425 @@ def move_task(request, project, epic, task):
             new_subtask_seq_id = get_next_seq_id(target_project, 'subtask')
             subtask_meta['seq_id'] = new_subtask_seq_id
             subtask_meta['project_id'] = target_project
-            subtask_meta['epic_id'] = target_epic
+            if target_epic:
+                subtask_meta['epic_id'] = target_epic
+            else:
+                subtask_meta.pop('epic_id', None)
             subtask_meta['task_id'] = task
-            save_subtask(target_project, target_epic, task, subtask_id, subtask_meta, subtask_content)
+            save_subtask(target_project, task, subtask_id, subtask_meta, subtask_content, epic_id=target_epic)
         
         # Update dependencies: tasks that reference this task need to be updated
         # Find all tasks/subtasks that have this task in their blocks/blocked_by
-        all_projects_dir = safe_join_path('projects')
-        if os.path.exists(all_projects_dir):
-            for p_id in os.listdir(all_projects_dir):
-                if not os.path.isdir(os.path.join(all_projects_dir, p_id)):
-                    continue
-                p_epics_dir = os.path.join(all_projects_dir, p_id, 'epics')
-                if not os.path.exists(p_epics_dir):
-                    continue
-                for e_id in os.listdir(p_epics_dir):
-                    e_dir = os.path.join(p_epics_dir, e_id)
-                    if not os.path.isdir(e_dir):
-                        continue
-                    e_tasks_dir = os.path.join(e_dir, 'tasks')
-                    if not os.path.exists(e_tasks_dir):
-                        continue
-                    for t_file in os.listdir(e_tasks_dir):
-                        if not t_file.endswith('.md'):
-                            continue
-                        t_id = t_file[:-3]
-                        t_meta, t_content = load_task(p_id, e_id, t_id)
-                        if not t_meta:
-                            continue
-                        
-                        updated = False
-                        # Check blocks
-                        if task in t_meta.get('blocks', []):
-                            # Task is referenced, update if needed (dependencies are by ID, so they should still work)
-                            # But we should update activity
-                            add_activity_entry(t_meta, 'dependency_updated', None, f"blocks {task_metadata.get('title', task)}")
-                            updated = True
-                        # Check blocked_by
-                        if task in t_meta.get('blocked_by', []):
-                            add_activity_entry(t_meta, 'dependency_updated', None, f"blocked by {task_metadata.get('title', task)}")
-                            updated = True
-                        
-                        if updated:
-                            save_task(p_id, e_id, t_id, t_meta, t_content)
-                        
-                        # Check subtasks
-                        t_subtasks_dir = os.path.join(e_tasks_dir, t_id, 'subtasks')
-                        if os.path.exists(t_subtasks_dir):
-                            for s_file in os.listdir(t_subtasks_dir):
-                                if not s_file.endswith('.md'):
-                                    continue
-                                s_id = s_file[:-3]
-                                s_meta, s_content = load_subtask(p_id, e_id, t_id, s_id)
-                                if not s_meta:
-                                    continue
-                                
-                                s_updated = False
-                                if task in s_meta.get('blocks', []):
-                                    add_activity_entry(s_meta, 'dependency_updated', None, f"blocks {task_metadata.get('title', task)}")
-                                    s_updated = True
-                                if task in s_meta.get('blocked_by', []):
-                                    add_activity_entry(s_meta, 'dependency_updated', None, f"blocked by {task_metadata.get('title', task)}")
-                                    s_updated = True
-                                
-                                if s_updated:
-                                    save_subtask(p_id, e_id, t_id, s_id, s_meta, s_content)
+        all_tasks = Entity.objects.filter(type='task')
+        for t_entity in all_tasks:
+            t_meta = _build_metadata_from_entity(t_entity)
+            t_content = t_entity.content
+            
+            updated = False
+            # Check blocks (stored in dependencies array)
+            dependencies = t_meta.get('dependencies', [])
+            if task in dependencies:
+                add_activity_entry(t_meta, 'dependency_updated', None, f"blocks {task_metadata.get('title', task)}")
+                updated = True
+            # Check blocked_by (also in dependencies)
+            if task in dependencies:
+                add_activity_entry(t_meta, 'dependency_updated', None, f"blocked by {task_metadata.get('title', task)}")
+                updated = True
+            
+            if updated:
+                save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
         
-        # Delete old task file and directory
-        old_task_path = safe_join_path('projects', project, 'epics', epic, 'tasks', f'{task}.md')
-        old_task_dir = safe_join_path('projects', project, 'epics', epic, 'tasks', task)
-        if os.path.exists(old_task_path):
-            os.remove(old_task_path)
-        if os.path.exists(old_task_dir):
-            shutil.rmtree(old_task_dir)
+        # Check subtasks for dependencies
+        all_subtasks = Entity.objects.filter(type='subtask')
+        for s_entity in all_subtasks:
+            s_meta = _build_metadata_from_entity(s_entity)
+            s_content = s_entity.content
+            
+            s_updated = False
+            dependencies = s_meta.get('dependencies', [])
+            if task in dependencies:
+                add_activity_entry(s_meta, 'dependency_updated', None, f"blocks {task_metadata.get('title', task)}")
+                s_updated = True
+            if task in dependencies:
+                add_activity_entry(s_meta, 'dependency_updated', None, f"blocked by {task_metadata.get('title', task)}")
+                s_updated = True
+            
+            if s_updated:
+                save_subtask(s_entity.project_id, s_entity.task_id, s_entity.id, s_meta, s_content, epic_id=s_entity.epic_id)
         
         # Update stats for both projects
         update_project_stats(project)
         update_project_stats(target_project)
         
+        if target_epic:
+            url = reverse('task_detail', kwargs={'project': target_project, 'epic': target_epic, 'task': task})
+        else:
+            url = reverse('task_detail_no_epic', kwargs={'project': target_project, 'task': task})
+        
         return JsonResponse({
             'success': True,
-            'url': reverse('task_detail', kwargs={'project': target_project, 'epic': target_epic, 'task': task})
+            'url': url
         })
     
     except Exception as e:
         logger.error(f"Error moving task: {e}")
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+def move_task_no_epic(request, project, task):
+    """Move a task without epic to another project/epic."""
+    return move_task(request, project, None, task)
+
+
+def move_epic(request, project, epic):
+    """Move an epic to another project, moving all tasks and subtasks."""
+    if request.method == 'GET':
+        # Return projects list (epics don't need epic selection, just project)
+        projects = get_all_projects_for_dropdown()
+        # Include inbox in the list for completeness
+        projects.insert(0, {'id': INBOX_PROJECT_ID, 'title': 'Inbox'})
+        
+        return JsonResponse({
+            'projects': projects
+        })
+    
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'POST required'}, status=400)
+    
+    # Validate current epic exists
+    epic_metadata, epic_content = load_epic(project, epic)
+    if not epic_metadata:
+        return JsonResponse({'success': False, 'error': 'Epic not found'}, status=404)
+    
+    # Get target project
+    target_project = request.POST.get('target_project', '').strip()
+    
+    if not target_project:
+        return JsonResponse({'success': False, 'error': 'Target project required'}, status=400)
+    
+    if not is_valid_project_id(target_project):
+        return JsonResponse({'success': False, 'error': 'Invalid target project'}, status=400)
+    
+    # Do not allow moving to same location
+    if project == target_project:
+        return JsonResponse({'success': False, 'error': 'Epic is already in this project'}, status=400)
+    
+    try:
+        # Generate new seq_id for target project
+        new_seq_id = get_next_seq_id(target_project, 'epic')
+        epic_metadata['seq_id'] = new_seq_id
+        
+        # Update project reference in metadata
+        epic_metadata['project_id'] = target_project
+        
+        # Add move activity
+        old_location = f"{project}"
+        new_location = f"{target_project}"
+        add_activity_entry(epic_metadata, 'moved', old_location, new_location)
+        
+        # Load all tasks and their subtasks
+        tasks_to_move = []
+        task_entities = Entity.objects.filter(type='task', project_id=project, epic_id=epic)
+        for task_entity in task_entities:
+            task_meta = _build_metadata_from_entity(task_entity)
+            task_content = task_entity.content
+            
+            # Load subtasks for this task
+            subtasks_to_move = []
+            subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id=epic)
+            for subtask in subtask_entities:
+                subtask_meta = _build_metadata_from_entity(subtask)
+                subtasks_to_move.append((subtask.id, subtask_meta, subtask.content))
+            
+            tasks_to_move.append((task_entity.id, task_meta, task_content, subtasks_to_move))
+        
+        # Save epic to new location
+        save_epic(target_project, epic, epic_metadata, epic_content)
+        
+        # Move all tasks and their subtasks
+        for task_id, task_meta, task_content, subtasks_to_move in tasks_to_move:
+            # Generate new seq_id for task in new project
+            new_task_seq_id = get_next_seq_id(target_project, 'task')
+            task_meta['seq_id'] = new_task_seq_id
+            task_meta['project_id'] = target_project
+            task_meta['epic_id'] = epic
+            
+            # Add move activity for task
+            add_activity_entry(task_meta, 'moved', f"{project}/{epic}", f"{target_project}/{epic}")
+            
+            # Save task to new location
+            save_task(target_project, task_id, task_meta, task_content, epic_id=epic)
+            
+            # Move all subtasks
+            for subtask_id, subtask_meta, subtask_content in subtasks_to_move:
+                # Generate new seq_id for subtask in new project
+                new_subtask_seq_id = get_next_seq_id(target_project, 'subtask')
+                subtask_meta['seq_id'] = new_subtask_seq_id
+                subtask_meta['project_id'] = target_project
+                subtask_meta['epic_id'] = epic
+                subtask_meta['task_id'] = task_id
+                
+                # Add move activity for subtask
+                add_activity_entry(subtask_meta, 'moved', f"{project}/{epic}/{task_id}", f"{target_project}/{epic}/{task_id}")
+                
+                save_subtask(target_project, task_id, subtask_id, subtask_meta, subtask_content, epic_id=epic)
+        
+        # Update dependencies: entities that reference tasks in this epic need to be updated
+        # Find all tasks/subtasks that have any task from this epic in their blocks/blocked_by
+        task_ids_moved = [t[0] for t in tasks_to_move]
+        subtask_ids_moved = []
+        for _, _, _, subtasks in tasks_to_move:
+            subtask_ids_moved.extend([s[0] for s in subtasks])
+        
+        # Query all tasks for dependencies
+        all_tasks = Entity.objects.filter(type='task')
+        for t_entity in all_tasks:
+            t_meta = _build_metadata_from_entity(t_entity)
+            t_content = t_entity.content
+            
+            updated = False
+            # Check blocks for moved tasks (blocks/blocked_by are in dependencies or metadata)
+            for moved_task_id in task_ids_moved:
+                # Find the task metadata for title
+                moved_task_title = moved_task_id
+                for tid, tmeta, _, _ in tasks_to_move:
+                    if tid == moved_task_id:
+                        moved_task_title = tmeta.get('title', moved_task_id)
+                        break
+                # Check if moved_task_id is in dependencies or blocks/blocked_by
+                dependencies = t_meta.get('dependencies', [])
+                blocks = t_meta.get('blocks', [])
+                blocked_by = t_meta.get('blocked_by', [])
+                if moved_task_id in blocks or moved_task_id in dependencies:
+                    add_activity_entry(t_meta, 'dependency_updated', None, f"blocks {moved_task_title}")
+                    updated = True
+                if moved_task_id in blocked_by or moved_task_id in dependencies:
+                    add_activity_entry(t_meta, 'dependency_updated', None, f"blocked by {moved_task_title}")
+                    updated = True
+            
+            if updated:
+                save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
+        
+        # Query all subtasks for dependencies
+        all_subtasks = Entity.objects.filter(type='subtask')
+        for s_entity in all_subtasks:
+            s_meta = _build_metadata_from_entity(s_entity)
+            s_content = s_entity.content
+            
+            s_updated = False
+            for moved_task_id in task_ids_moved:
+                # Find the task metadata for title
+                moved_task_title = moved_task_id
+                for tid, tmeta, _, _ in tasks_to_move:
+                    if tid == moved_task_id:
+                        moved_task_title = tmeta.get('title', moved_task_id)
+                        break
+                dependencies = s_meta.get('dependencies', [])
+                blocks = s_meta.get('blocks', [])
+                blocked_by = s_meta.get('blocked_by', [])
+                if moved_task_id in blocks or moved_task_id in dependencies:
+                    add_activity_entry(s_meta, 'dependency_updated', None, f"blocks {moved_task_title}")
+                    s_updated = True
+                if moved_task_id in blocked_by or moved_task_id in dependencies:
+                    add_activity_entry(s_meta, 'dependency_updated', None, f"blocked by {moved_task_title}")
+                    s_updated = True
+            
+            if s_updated:
+                save_subtask(s_entity.project_id, s_entity.task_id, s_entity.id, s_meta, s_content, epic_id=s_entity.epic_id)
+        
+        # Update stats for both projects
+        update_project_stats(project)
+        update_project_stats(target_project)
+        
+        url = reverse('epic_detail', kwargs={'project': target_project, 'epic': epic})
+        
+        return JsonResponse({
+            'success': True,
+            'url': url
+        })
+    
+    except Exception as e:
+        logger.error(f"Error moving epic: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+def move_subtask(request, project, task, subtask, epic=None):
+    """Move a subtask to another task/project."""
+    if request.method == 'GET':
+        # Return projects, epics, and tasks for selection
+        projects = get_all_projects_for_dropdown()
+        # Include inbox in the list for completeness
+        projects.insert(0, {'id': INBOX_PROJECT_ID, 'title': 'Inbox'})
+        
+        # Get epics and tasks for each project
+        projects_with_data = []
+        for p in projects:
+            p_id = p['id']
+            epics = []
+            epic_entities = Entity.objects.filter(type='epic', project_id=p_id)
+            for epic in epic_entities:
+                if not epic.archived:
+                    # Get tasks for this epic
+                    tasks = []
+                    task_entities = Entity.objects.filter(type='task', project_id=p_id, epic_id=epic.id)
+                    for task in task_entities:
+                        tasks.append({
+                            'id': task.id,
+                            'title': task.title or 'Untitled Task',
+                            'seq_id': task.seq_id or ''
+                        })
+                    
+                    epics.append({
+                        'id': epic.id,
+                        'title': epic.title or 'Untitled Epic',
+                        'seq_id': epic.seq_id or '',
+                        'tasks': sorted(tasks, key=lambda t: (t.get('seq_id', ''), t.get('title', '')))
+                    })
+            
+            # Also get direct tasks (without epic)
+            direct_tasks = []
+            direct_task_entities = Entity.objects.filter(type='task', project_id=p_id, epic_id__isnull=True)
+            for task in direct_task_entities:
+                direct_tasks.append({
+                    'id': task.id,
+                    'title': task.title or 'Untitled Task',
+                    'seq_id': task.seq_id or ''
+                })
+            
+            projects_with_data.append({
+                'id': p_id,
+                'title': p['title'],
+                'epics': sorted(epics, key=lambda e: (e.get('seq_id', ''), e.get('title', ''))),
+                'direct_tasks': sorted(direct_tasks, key=lambda t: (t.get('seq_id', ''), t.get('title', '')))
+            })
+        
+        return JsonResponse({
+            'projects': projects_with_data
+        })
+    
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'POST required'}, status=400)
+    
+    # Validate current subtask exists
+    subtask_metadata, subtask_content = load_subtask(project, task, subtask, epic_id=epic)
+    if not subtask_metadata:
+        return JsonResponse({'success': False, 'error': 'Subtask not found'}, status=404)
+    
+    # Get target project, epic (optional), and task
+    target_project = request.POST.get('target_project', '').strip()
+    target_epic = request.POST.get('target_epic', '').strip() or None
+    target_task = request.POST.get('target_task', '').strip()
+    
+    if not target_project:
+        return JsonResponse({'success': False, 'error': 'Target project required'}, status=400)
+    
+    if not is_valid_project_id(target_project):
+        return JsonResponse({'success': False, 'error': 'Invalid target project'}, status=400)
+    
+    if not target_task:
+        return JsonResponse({'success': False, 'error': 'Target task required'}, status=400)
+    
+    if not validate_id(target_task, 'task'):
+        return JsonResponse({'success': False, 'error': 'Invalid target task'}, status=400)
+    
+    # If epic provided, validate it
+    if target_epic:
+        if not validate_id(target_epic, 'epic'):
+            return JsonResponse({'success': False, 'error': 'Invalid target epic'}, status=400)
+        # Verify target epic exists
+        target_epic_meta, _ = load_epic(target_project, target_epic, metadata_only=True)
+        if not target_epic_meta:
+            return JsonResponse({'success': False, 'error': 'Target epic not found'}, status=404)
+    
+    # Verify target task exists
+    target_task_meta, _ = load_task(target_project, target_task, epic_id=target_epic, metadata_only=True)
+    if not target_task_meta:
+        return JsonResponse({'success': False, 'error': 'Target task not found'}, status=404)
+    
+    # Do not allow moving to same location
+    if project == target_project and epic == target_epic and task == target_task:
+        return JsonResponse({'success': False, 'error': 'Subtask is already in this location'}, status=400)
+    
+    try:
+        # Generate new seq_id for subtask in target project
+        new_seq_id = get_next_seq_id(target_project, 'subtask')
+        subtask_metadata['seq_id'] = new_seq_id
+        
+        # Update project/epic/task references in metadata
+        subtask_metadata['project_id'] = target_project
+        if target_epic:
+            subtask_metadata['epic_id'] = target_epic
+        else:
+            subtask_metadata.pop('epic_id', None)
+        subtask_metadata['task_id'] = target_task
+        
+        # Add move activity
+        old_location = f"{project}/{epic if epic else 'direct'}/{task}"
+        new_location = f"{target_project}/{target_epic if target_epic else 'direct'}/{target_task}"
+        add_activity_entry(subtask_metadata, 'moved', old_location, new_location)
+        
+        # Save subtask to new location
+        save_subtask(target_project, target_task, subtask, subtask_metadata, subtask_content, epic_id=target_epic)
+        
+        # Update dependencies: entities that reference this subtask need to be updated
+        # Query all tasks for dependencies
+        all_tasks = Entity.objects.filter(type='task')
+        for t_entity in all_tasks:
+            t_meta = _build_metadata_from_entity(t_entity)
+            t_content = t_entity.content
+            
+            updated = False
+            # Check blocks
+            if subtask in t_meta.get('blocks', []):
+                add_activity_entry(t_meta, 'dependency_updated', None, f"blocks {subtask_metadata.get('title', subtask)}")
+                updated = True
+            # Check blocked_by
+            if subtask in t_meta.get('blocked_by', []):
+                add_activity_entry(t_meta, 'dependency_updated', None, f"blocked by {subtask_metadata.get('title', subtask)}")
+                updated = True
+            
+            if updated:
+                save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
+        
+        # Query all subtasks for dependencies
+        all_subtasks = Entity.objects.filter(type='subtask')
+        for s_entity in all_subtasks:
+            s_meta = _build_metadata_from_entity(s_entity)
+            s_content = s_entity.content
+            
+            s_updated = False
+            if subtask in s_meta.get('blocks', []):
+                add_activity_entry(s_meta, 'dependency_updated', None, f"blocks {subtask_metadata.get('title', subtask)}")
+                s_updated = True
+            if subtask in s_meta.get('blocked_by', []):
+                add_activity_entry(s_meta, 'dependency_updated', None, f"blocked by {subtask_metadata.get('title', subtask)}")
+                s_updated = True
+            
+            if s_updated:
+                save_subtask(s_entity.project_id, s_entity.task_id, s_entity.id, s_meta, s_content, epic_id=s_entity.epic_id)
+        
+        # Update stats for both projects
+        update_project_stats(project)
+        update_project_stats(target_project)
+        
+        if target_epic:
+            url = reverse('subtask_detail', kwargs={'project': target_project, 'epic': target_epic, 'task': target_task, 'subtask': subtask})
+        else:
+            url = reverse('subtask_detail_no_epic', kwargs={'project': target_project, 'task': target_task, 'subtask': subtask})
+        
+        return JsonResponse({
+            'success': True,
+            'url': url
+        })
+    
+    except Exception as e:
+        logger.error(f"Error moving subtask: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+def move_subtask_no_epic(request, project, task, subtask):
+    """Move a subtask without epic to another task/project."""
+    return move_subtask(request, project, task, subtask, epic=None)
 
 
 def upload_image(request):
@@ -5447,12 +5617,13 @@ def upload_image(request):
                 f.write(chunk)
         
         # Return relative URL path for markdown
-        # Path will be: /static/uploads/YYYY/MM/filename.ext
+        # Path will be: /uploads/YYYY/MM/filename.ext
+        # Using /uploads/ instead of /static/uploads/ to avoid conflict with Django's staticfiles
         relative_path = f'uploads/{now.strftime("%Y")}/{now.strftime("%m")}/{filename}'
         
         return JsonResponse({
             'success': True,
-            'url': f'/static/{relative_path}',
+            'url': f'/{relative_path}',
             'path': relative_path
         })
         

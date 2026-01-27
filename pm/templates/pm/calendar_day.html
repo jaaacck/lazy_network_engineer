@@ -15,15 +15,14 @@
     <a href="{% url 'calendar_day' date_str=prev_day %}" class="button">&lt; Previous Day</a>
     <a href="{% url 'calendar' %}" class="button">Today</a>
     <a href="{% url 'calendar_day' date_str=next_day %}" class="button">Next Day &gt;</a>
-    <span style="margin-left: 10px;"></span>
     <a href="{% url 'calendar_week' year=year week=week %}" class="button">Week View</a>
 </div>
 
 <div class="calendar-controls">
     <form method="post" id="calendar-preferences" class="tool-form-row">
         {% csrf_token %}
-        <label for="timeframe" style="font-size: 9pt;">Timeframe:</label>
-        <select name="timeframe" id="timeframe" style="font-size: 9pt; padding: 2px;">
+        <label for="timeframe">Timeframe:</label>
+        <select name="timeframe" id="timeframe" class="tool-select">
             <option value="1" {% if timeframe == 1 %}selected{% endif %}>1hr</option>
             <option value="2" {% if timeframe == 2 %}selected{% endif %}>2hrs</option>
             <option value="8" {% if timeframe == 8 %}selected{% endif %}>8hrs</option>
@@ -31,8 +30,8 @@
             <option value="24" {% if timeframe == 24 %}selected{% endif %}>24hrs</option>
         </select>
         
-        <label for="start_hour" style="font-size: 9pt; margin-left: 10px;">Start Time:</label>
-        <select name="start_hour" id="start_hour" style="font-size: 9pt; padding: 2px;">
+        <label for="start_hour">Start Time:</label>
+        <select name="start_hour" id="start_hour" class="tool-select">
             {% for hour in all_hours %}
                 <option value="{{ hour }}" {% if start_hour == hour %}selected{% endif %}>
                     {{ hour }}:00
@@ -40,8 +39,8 @@
             {% endfor %}
         </select>
         
-        <label for="project_filter" style="font-size: 9pt; margin-left: 10px;">Filter Projects:</label>
-        <select name="project_filter" id="project_filter" multiple style="font-size: 9pt; padding: 2px; min-width: 150px;">
+        <label for="project_filter">Filter Projects:</label>
+        <select name="project_filter" id="project_filter" multiple class="tool-select" style="min-width: 150px;">
             <option value="all" {% if project_filter == 'all' %}selected{% endif %}>All Projects</option>
             {% for project in projects %}
             <option value="{{ project.id }}" {% if project.id in selected_projects %}selected{% endif %}>
@@ -50,7 +49,7 @@
             {% endfor %}
         </select>
         
-        <button type="submit" style="font-size: 9pt; padding: 2px 8px; margin-left: 5px;">Apply</button>
+        <button type="submit" class="tool-button">Apply</button>
     </form>
 </div>
 
@@ -82,7 +81,11 @@
                 {{ task.schedule_start|slice:"11:16" }}
                 {% if task.schedule_end %} - {{ task.schedule_end|slice:"11:16" }}{% endif %}
             </div>
+            {% if task.epic_id %}
             <a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">
+            {% else %}
+            <a href="{% url 'task_detail_no_epic' project=task.project_id task=task.id %}">
+            {% endif %}
                 {% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}{{ task.title }}
             </a>
             <div class="task-project">
@@ -109,7 +112,11 @@
                      data-epic-id="{{ epic.id }}"
                      data-task-id="{{ task.id }}"
                      data-subtask-id="">
+                    {% if epic.id %}
                     <a href="{% url 'task_detail' project=project.id epic=epic.id task=task.id %}">{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}{{ task.title }}</a>
+                    {% else %}
+                    <a href="{% url 'task_detail_no_epic' project=project.id task=task.id %}">{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}{{ task.title }}</a>
+                    {% endif %}
                     {% if task.subtasks %}
                     <details class="subtask-group">
                         <summary class="subtask-header">Subtasks</summary>
@@ -117,10 +124,14 @@
                         <div class="subtask-item draggable-item"
                              draggable="true"
                              data-project-id="{{ project.id }}"
-                             data-epic-id="{{ epic.id }}"
+                             data-epic-id="{{ epic.id|default:'' }}"
                              data-task-id="{{ task.id }}"
                              data-subtask-id="{{ subtask.id }}">
+                            {% if epic.id %}
                             <a href="{% url 'subtask_detail' project=project.id epic=epic.id task=task.id subtask=subtask.id %}">{{ subtask.title }}</a>
+                            {% else %}
+                            <a href="{% url 'subtask_detail_no_epic' project=project.id task=task.id subtask=subtask.id %}">{{ subtask.title }}</a>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </details>
