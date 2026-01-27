@@ -1,7 +1,5 @@
 import re
 import hashlib
-import time
-import json
 from urllib.parse import quote
 from django import template
 from django.template.defaultfilters import stringfilter
@@ -37,29 +35,13 @@ def markdownify(value):
     """
     Convert markdown to HTML and sanitize output.
     """
-    # #region agent log
-    md_start = time.time()
-    with open('/Users/jack/Documents/project_manager/.cursor/debug.log', 'a') as f:
-        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'G', 'location': 'templatetags/markdown_extras.py:34', 'message': 'markdownify entry', 'data': {'content_length': len(value) if value else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    # #endregion
     if not value:
         return ""
 
     cache_key = f"md:{hashlib.md5(value.encode('utf-8')).hexdigest()}"
     cached = cache.get(cache_key)
     if cached is not None:
-        # #region agent log
-        md_end = time.time()
-        with open('/Users/jack/Documents/project_manager/.cursor/debug.log', 'a') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'G', 'location': 'templatetags/markdown_extras.py:44', 'message': 'markdownify exit (cache hit)', 'data': {'duration_ms': (md_end - md_start) * 1000}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        # #endregion
         return cached
-
-    # #region agent log
-    md_process_start = time.time()
-    with open('/Users/jack/Documents/project_manager/.cursor/debug.log', 'a') as f:
-        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'G', 'location': 'templatetags/markdown_extras.py:47', 'message': 'markdownify cache miss, processing', 'data': {'content_length': len(value)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    # #endregion
 
     # Convert markdown to HTML
     html = markdown.markdown(
@@ -85,11 +67,6 @@ def markdownify(value):
     )
 
     cache.set(cache_key, html, 3600)
-    # #region agent log
-    md_end = time.time()
-    with open('/Users/jack/Documents/project_manager/.cursor/debug.log', 'a') as f:
-        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'G', 'location': 'templatetags/markdown_extras.py:70', 'message': 'markdownify exit (processed)', 'data': {'duration_ms': (md_end - md_start) * 1000, 'process_duration_ms': (md_end - md_process_start) * 1000}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    # #endregion
     return html
 
 
