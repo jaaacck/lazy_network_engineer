@@ -47,11 +47,11 @@
                 <input type="hidden" name="quick_update" value="priority">
                 <select name="priority" class="badge badge-priority priority-{{ metadata.priority|default:'none' }}" onchange="this.form.submit()">
                     <option value="">None</option>
-                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>P1</option>
-                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>P2</option>
-                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>P3</option>
-                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>P4</option>
-                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>P5</option>
+                    <option value="1" {% if metadata.priority == 1 %}selected{% endif %}>P1</option>
+                    <option value="2" {% if metadata.priority == 2 %}selected{% endif %}>P2</option>
+                    <option value="3" {% if metadata.priority == 3 %}selected{% endif %}>P3</option>
+                    <option value="4" {% if metadata.priority == 4 %}selected{% endif %}>P4</option>
+                    <option value="5" {% if metadata.priority == 5 %}selected{% endif %}>P5</option>
                 </select>
             </form>
         </div>
@@ -362,16 +362,24 @@
         {% if updates %}
         <div id="activity-list">
         {% for update in updates %}
-        <div class="update update-{{ update.type|default:'user' }}" data-update-type="{{ update.type|default:'user' }}">
+        <div class="update update-{{ update.type|default:'user' }}" data-update-type="{{ update.type|default:'user' }}" data-update-timestamp="{{ update.timestamp|date:'Y-m-d H:i' }}" id="update-{{ forloop.counter }}">
             <div class="update-meta">
                 <span class="update-timestamp">{{ update.timestamp|date:"Y-m-d H:i" }}</span>
                 {% if update.type == 'system' %}
                 <span class="update-type-badge">system</span>
                 {% else %}
                 <span class="update-type-badge">user</span>
+                <button class="update-edit-btn" data-update-id="update-{{ forloop.counter }}" title="Edit update">edit</button>
                 {% endif %}
             </div>
-            <div class="update-content content">{{ update.content|markdownify|safe }}</div>
+            <div class="update-content content" id="update-display-{{ forloop.counter }}">{{ update.content|markdownify|safe }}</div>
+            <div class="update-editor-container" id="update-editor-container-{{ forloop.counter }}" style="display: none; margin-top: 10px;">
+                <textarea class="update-editor" id="update-editor-{{ forloop.counter }}">{{ update.content }}</textarea>
+                <div class="update-actions" style="margin-top: 10px;">
+                    <button type="button" class="update-save-btn" data-update-id="update-{{ forloop.counter }}">Save</button>
+                    <button type="button" class="update-cancel-btn" data-update-id="update-{{ forloop.counter }}">Cancel</button>
+                </div>
+            </div>
         </div>
         {% endfor %}
         </div>
@@ -684,6 +692,107 @@
     if (filterSystem) filterSystem.addEventListener('change', updateActivityFilter);
     if (filterUser) filterUser.addEventListener('change', updateActivityFilter);
     updateActivityFilter(); // Apply filter on page load
+
+    // Update editor handling
+    var updateEditors = {};
+    var originalUpdateContent = {};
+    
+    document.querySelectorAll('.update-edit-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var updateId = btn.getAttribute('data-update-id');
+            var updateContainer = document.getElementById(updateId);
+            var updateDisplay = document.getElementById('update-display-' + updateId.split('-')[1]);
+            var updateEditorContainer = document.getElementById('update-editor-container-' + updateId.split('-')[1]);
+            var updateEditor = document.getElementById('update-editor-' + updateId.split('-')[1]);
+            
+            // Hide display and show editor
+            updateDisplay.style.display = 'none';
+            updateEditorContainer.style.display = 'block';
+            
+            // Initialize EasyMDE if not already initialized for this update
+            if (!updateEditors[updateId]) {
+                updateEditors[updateId] = new EasyMDE({
+                    element: updateEditor,
+                    spellChecker: false,
+                    toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                    minHeight: '100px',
+                    placeholder: 'Edit update... (Markdown supported)',
+                    status: false,
+                    autosave: {
+                        enabled: false
+                    }
+                });
+                originalUpdateContent[updateId] = updateEditors[updateId].value();
+            } else {
+                updateEditors[updateId].value(originalUpdateContent[updateId]);
+            }
+        });
+    });
+    
+    document.querySelectorAll('.update-save-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var updateId = btn.getAttribute('data-update-id');
+            var updateNumber = updateId.split('-')[1];
+            var updateEditor = updateEditors[updateId];
+            var newContent = updateEditor ? updateEditor.value() : document.getElementById('update-editor-' + updateNumber).value;
+            var timestamp = document.getElementById(updateId).getAttribute('data-update-timestamp');
+            
+            if (!newContent || newContent.trim() === '') {
+                alert('Update cannot be empty.');
+                return;
+            }
+            
+            var formData = new FormData();
+            formData.append('quick_update', 'edit_update');
+            formData.append('update_timestamp', timestamp);
+            formData.append('update_content', newContent);
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+            
+            var url = '{% if epic %}{% url "subtask_detail" project=project epic=epic task=task subtask=subtask %}{% else %}{% url "subtask_detail_no_epic" project=project task=task subtask=subtask %}{% endif %}';
+            fetch(url, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Update display with new content
+                    document.getElementById('update-display-' + updateNumber).innerHTML = data.content;
+                    originalUpdateContent[updateId] = newContent;
+                    
+                    // Switch back to view mode
+                    document.getElementById('update-editor-container-' + updateNumber).style.display = 'none';
+                    document.getElementById('update-display-' + updateNumber).style.display = 'block';
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to update'));
+                }
+            })
+            .catch(function(err) {
+                console.error('Error saving update:', err);
+                alert('Error saving update');
+            });
+        });
+    });
+    
+    document.querySelectorAll('.update-cancel-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var updateId = btn.getAttribute('data-update-id');
+            var updateNumber = updateId.split('-')[1];
+            var updateEditor = updateEditors[updateId];
+            
+            // Restore original content
+            if (updateEditor) {
+                updateEditor.value(originalUpdateContent[updateId]);
+            }
+            
+            // Switch back to view mode
+            document.getElementById('update-editor-container-' + updateNumber).style.display = 'none';
+            document.getElementById('update-display-' + updateNumber).style.display = 'block';
+        });
+    });
 </script>
 
 <!-- Move Subtask Modal -->

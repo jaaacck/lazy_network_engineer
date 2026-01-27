@@ -54,11 +54,11 @@
                 <input type="hidden" name="quick_update" value="priority">
                 <select name="priority" class="badge badge-priority priority-{{ metadata.priority|default:'none' }}" onchange="this.form.submit()">
                     <option value="">None</option>
-                    <option value="1" {% if metadata.priority == '1' %}selected{% endif %}>P1</option>
-                    <option value="2" {% if metadata.priority == '2' %}selected{% endif %}>P2</option>
-                    <option value="3" {% if metadata.priority == '3' %}selected{% endif %}>P3</option>
-                    <option value="4" {% if metadata.priority == '4' %}selected{% endif %}>P4</option>
-                    <option value="5" {% if metadata.priority == '5' %}selected{% endif %}>P5</option>
+                    <option value="1" {% if metadata.priority == 1 %}selected{% endif %}>P1</option>
+                    <option value="2" {% if metadata.priority == 2 %}selected{% endif %}>P2</option>
+                    <option value="3" {% if metadata.priority == 3 %}selected{% endif %}>P3</option>
+                    <option value="4" {% if metadata.priority == 4 %}selected{% endif %}>P4</option>
+                    <option value="5" {% if metadata.priority == 5 %}selected{% endif %}>P5</option>
                 </select>
             </form>
         </div>

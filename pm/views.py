@@ -137,6 +137,47 @@ def normalize_people(raw):
     return [s.strip().lstrip('@') for s in str(raw).split(',') if s.strip()]
 
 
+def enrich_updates_with_stored_types(entity_id, updates_list):
+    """Enrich updates from metadata with type/activity_type from Update table.
+    
+    For each update, look up the stored type/activity_type from the Update table
+    to replace defaults/missing values in metadata.
+    """
+    if not updates_list or not entity_id:
+        return updates_list
+    
+    # Build map of timestamp -> (type, activity_type) from Update table
+    update_map = {}
+    try:
+        stored_updates = Update.objects.filter(entity_id=entity_id).values('timestamp', 'type', 'activity_type')
+        for u in stored_updates:
+            update_map[u['timestamp']] = {
+                'type': u['type'],
+                'activity_type': u['activity_type']
+            }
+    except Exception as e:
+        logger.warning(f"Could not load stored update types for {entity_id}: {e}")
+    
+    # Enrich metadata updates with stored values
+    enriched = []
+    for update in updates_list:
+        update_copy = update.copy() if isinstance(update, dict) else update
+        timestamp = update_copy.get('timestamp')
+        
+        if timestamp and timestamp in update_map:
+            # Use stored values from Update table
+            stored = update_map[timestamp]
+            update_copy['type'] = stored['type']
+            update_copy['activity_type'] = stored['activity_type']
+        elif 'type' not in update_copy:
+            # Default to 'user' for backward compatibility
+            update_copy['type'] = 'user'
+        
+        enriched.append(update_copy)
+    
+    return enriched
+
+
 def add_activity_entry(metadata, activity_type, old_value=None, new_value=None, details=None):
     """Add a system activity entry to metadata and Update table.
     
@@ -208,7 +249,9 @@ def add_activity_entry(metadata, activity_type, old_value=None, new_value=None, 
         Update.objects.create(
             entity_id=entity_id,
             content=content,
-            timestamp=timestamp
+            timestamp=timestamp,
+            type='system',
+            activity_type=activity_type
         )
 
 
@@ -1818,19 +1861,17 @@ def _task_detail_impl(request, project, task, epic=None):
 
         return redirect('task_detail', project=project, epic=epic, task=task)
 
-    # Sort updates newest first
-    updates = []
-    for u in metadata.get('updates', []):
-        update_copy = u.copy()
-        if isinstance(update_copy['timestamp'], str):
+    # Sort updates newest first - enrich with stored type/activity_type from Update table
+    raw_updates = metadata.get('updates', [])
+    updates = enrich_updates_with_stored_types(task, raw_updates)
+    
+    # Parse timestamps
+    for u in updates:
+        if isinstance(u.get('timestamp'), str):
             try:
-                update_copy['timestamp'] = datetime.strptime(update_copy['timestamp'], '%Y-%m-%dT%H:%M:%S')
+                u['timestamp'] = datetime.strptime(u['timestamp'], '%Y-%m-%dT%H:%M:%S')
             except ValueError:
                 pass
-        # Default to 'user' type for backwards compatibility
-        if 'type' not in update_copy:
-            update_copy['type'] = 'user'
-        updates.append(update_copy)
     
     updates.sort(key=lambda x: x['timestamp'] if isinstance(x['timestamp'], datetime) else str(x['timestamp']), reverse=True)
 
@@ -2049,6 +2090,31 @@ def _task_detail_impl(request, project, task, epic=None):
                     'success': True,
                     'content': rendered
                 })
+            return get_task_redirect_url()
+        elif quick_update == 'edit_update':
+            # Edit an existing user update
+            update_timestamp = request.POST.get('update_timestamp', '').strip()
+            update_content = request.POST.get('update_content', '').strip()
+            
+            if update_timestamp and update_content and 'updates' in metadata:
+                # Find the update by timestamp and ensure it's a user update
+                updated = False
+                for u in metadata['updates']:
+                    if u.get('timestamp') == update_timestamp and u.get('type', 'user') == 'user':
+                        u['content'] = update_content
+                        updated = True
+                        break
+                
+                if updated:
+                    save_task(project, task, metadata, content, epic_id=epic)
+                    # Return JSON for AJAX requests
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        rendered = render_markdown(update_content)
+                        return JsonResponse({
+                            'success': True,
+                            'content': rendered
+                        })
+            
             return get_task_redirect_url()
 
     if request.method == 'POST' and 'title' in request.POST:
@@ -2374,19 +2440,17 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
 
         return redirect('subtask_detail', project=project, epic=epic, task=task, subtask=subtask)
 
-    # Sort updates newest first
-    updates = []
-    for u in metadata.get('updates', []):
-        update_copy = u.copy()
-        if isinstance(update_copy['timestamp'], str):
+    # Sort updates newest first - enrich with stored type/activity_type from Update table
+    raw_updates = metadata.get('updates', [])
+    updates = enrich_updates_with_stored_types(subtask, raw_updates)
+    
+    # Parse timestamps
+    for u in updates:
+        if isinstance(u.get('timestamp'), str):
             try:
-                update_copy['timestamp'] = datetime.strptime(update_copy['timestamp'], '%Y-%m-%dT%H:%M:%S')
+                u['timestamp'] = datetime.strptime(u['timestamp'], '%Y-%m-%dT%H:%M:%S')
             except ValueError:
                 pass
-        # Default to 'user' type for backwards compatibility
-        if 'type' not in update_copy:
-            update_copy['type'] = 'user'
-        updates.append(update_copy)
     
     updates.sort(key=lambda x: x['timestamp'] if isinstance(x['timestamp'], datetime) else str(x['timestamp']), reverse=True)
 
@@ -2583,6 +2647,31 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
                     'success': True,
                     'content': rendered
                 })
+            return get_subtask_redirect_url()
+        elif quick_update == 'edit_update':
+            # Edit an existing user update
+            update_timestamp = request.POST.get('update_timestamp', '').strip()
+            update_content = request.POST.get('update_content', '').strip()
+            
+            if update_timestamp and update_content and 'updates' in metadata:
+                # Find the update by timestamp and ensure it's a user update
+                updated = False
+                for u in metadata['updates']:
+                    if u.get('timestamp') == update_timestamp and u.get('type', 'user') == 'user':
+                        u['content'] = update_content
+                        updated = True
+                        break
+                
+                if updated:
+                    save_subtask(project, task, subtask, metadata, content, epic_id=epic)
+                    # Return JSON for AJAX requests
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        rendered = render_markdown(update_content)
+                        return JsonResponse({
+                            'success': True,
+                            'content': rendered
+                        })
+            
             return get_subtask_redirect_url()
 
     if request.method == 'POST' and 'title' in request.POST:
@@ -3048,12 +3137,30 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
 
 def get_project_activity(project_id):
     """Get recent activity (updates and system messages) across epics, tasks and subtasks in a project."""
-    cache_key = f"activity:{project_id}:v2"
+    cache_key = f"activity:{project_id}:v4"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     activity = []
+
+    def _derive_update_type(update_obj):
+        """Infer update type when older rows lack explicit type/activity_type."""
+        inferred = getattr(update_obj, 'type', None)
+        if inferred:
+            return inferred
+        activity_type = getattr(update_obj, 'activity_type', None)
+        if activity_type:
+            return 'system'
+        content = (update_obj.content or '').lower()
+        system_prefixes = [
+            'status changed', 'priority changed', 'start time', 'end time', 'due date',
+            'label "', "label '", 'person "', "person '", 'note "', "note '", 'dependency '
+        ]
+        for prefix in system_prefixes:
+            if content.startswith(prefix):
+                return 'system'
+        return 'user'
     
     # Query all epics in the project
     epics = Entity.objects.filter(type='epic', project_id=project_id)
@@ -3066,12 +3173,14 @@ def get_project_activity(project_id):
                 ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
             except ValueError:
                 ts_dt = ts
+            update_type = _derive_update_type(u)
             activity.append({
                 'type': 'epic',
                 'entity_type': 'epic',
                 'title': epic.title or 'Untitled Epic',
                 'content': u.content,
-                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'update_type': update_type,
+                'activity_type': getattr(u, 'activity_type', None),
                 'timestamp': ts_dt,
                 'url': reverse('epic_detail', kwargs={'project': project_id, 'epic': epic.id})
             })
@@ -3087,6 +3196,7 @@ def get_project_activity(project_id):
                 ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
             except ValueError:
                 ts_dt = ts
+            update_type = _derive_update_type(u)
             
             if task.epic_id:
                 url = reverse('task_detail', kwargs={'project': project_id, 'epic': task.epic_id, 'task': task.id})
@@ -3098,7 +3208,8 @@ def get_project_activity(project_id):
                 'entity_type': 'task',
                 'title': task.title or 'Untitled Task',
                 'content': u.content,
-                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'update_type': update_type,
+                'activity_type': getattr(u, 'activity_type', None),
                 'timestamp': ts_dt,
                 'url': url
             })
@@ -3114,6 +3225,7 @@ def get_project_activity(project_id):
                 ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
             except ValueError:
                 ts_dt = ts
+            update_type = _derive_update_type(u)
             
             if subtask.epic_id:
                 url = reverse('subtask_detail', kwargs={'project': project_id, 'epic': subtask.epic_id, 'task': subtask.task_id, 'subtask': subtask.id})
@@ -3125,7 +3237,8 @@ def get_project_activity(project_id):
                 'entity_type': 'subtask',
                 'title': subtask.title or 'Untitled Subtask',
                 'content': u.content,
-                'update_type': 'user',  # Update table doesn't store type, default to 'user'
+                'update_type': update_type,
+                'activity_type': getattr(u, 'activity_type', None),
                 'timestamp': ts_dt,
                 'url': url
             })
