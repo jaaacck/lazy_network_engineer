@@ -166,7 +166,7 @@
     <details class="section compact-section" style="margin-top: 8px; margin-bottom: 8px;"{% if blocks or blocked_by or show_actions_success %} open{% endif %}>
         <summary class="section-title" style="padding: 4px 0; font-size: 13px;">Actions & Relationships{% if blocks or blocked_by %} ({{ blocks_count|add:blocked_count }}){% endif %}</summary>
         <div style="font-size: 12px; line-height: 1.3;">
-            {% if blocks or blocked_by %}
+            {% if available_tasks %}
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                 <div>
                     <div style="font-weight: bold; font-size: 11px; margin-bottom: 2px;">Blocks</div>
@@ -185,13 +185,26 @@
                         </div>
                     </div>
                     {% if blocks %}
-                    <div style="margin-top: 2px;">
+                    <div style="margin-top: 4px;">
                         {% for block in blocks %}
-                        <div style="padding: 1px 0; display: flex; justify-content: space-between; align-items: center;">
-                            <a href="{% url 'task_detail' project=project epic=block.epic_id task=block.id %}" style="font-size: 11px;">
-                                {% if block.seq_id %}<span class="seq-id">{{ block.seq_id }}</span>{% endif %} {{ block.title|truncatewords:2 }}
-                            </a>
-                            <form method="post" class="dep-remove" style="display: inline; margin: 0;">{% csrf_token %}<input type="hidden" name="remove_block" value="{{ block.id }}"><button type="submit" style="font-size: 10px; padding: 0; border: none; background: none; color: #d00; cursor: pointer;">×</button></form>
+                        <div style="padding: 3px 4px; margin-bottom: 3px; border-left: 2px solid #e0e0e0; display: flex; justify-content: space-between; align-items: flex-start; gap: 4px;">
+                            <div style="flex: 1; min-width: 0;">
+                                {% if block.type == 'subtask' %}
+                                <a href="{% url 'subtask_detail' project=project epic=block.epic_id task=block.task_id subtask=block.id %}" style="font-size: 11px; text-decoration: none; color: #333;">
+                                    {% if block.seq_id %}<span class="seq-id" style="font-weight: bold;">{{ block.seq_id }}</span>{% endif %} {{ block.title }}
+                                </a>
+                                {% else %}
+                                <a href="{% url 'task_detail' project=project epic=block.epic_id task=block.id %}" style="font-size: 11px; text-decoration: none; color: #333;">
+                                    {% if block.seq_id %}<span class="seq-id" style="font-weight: bold;">{{ block.seq_id }}</span>{% endif %} {{ block.title }}
+                                </a>
+                                {% endif %}
+                                <div style="font-size: 10px; color: #666; margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <span class="badge badge-status status-{{ block.status }}" style="font-size: 9px; padding: 1px 3px;">{{ block.status }}</span>
+                                    {% if block.priority %}<span style="background: #f0f0f0; padding: 1px 3px; border-radius: 2px;">P{{ block.priority }}</span>{% endif %}
+                                    {% if block.epic_title %}<span style="color: #999;">{{ block.epic_title }}</span>{% endif %}
+                                </div>
+                            </div>
+                            <form method="post" class="dep-remove" style="display: inline; margin: 0; flex-shrink: 0;">{% csrf_token %}<input type="hidden" name="remove_block" value="{{ block.id }}"><button type="submit" style="font-size: 11px; padding: 2px 4px; border: none; background: #f0f0f0; color: #d00; cursor: pointer; border-radius: 2px;">×</button></form>
                         </div>
                         {% endfor %}
                     </div>
@@ -214,13 +227,26 @@
                         </div>
                     </div>
                     {% if blocked_by %}
-                    <div style="margin-top: 2px;">
+                    <div style="margin-top: 4px;">
                         {% for blocker in blocked_by %}
-                        <div style="padding: 1px 0; display: flex; justify-content: space-between; align-items: center;">
-                            <a href="{% url 'task_detail' project=project epic=blocker.epic_id task=blocker.id %}" style="font-size: 11px;">
-                                {% if blocker.seq_id %}<span class="seq-id">{{ blocker.seq_id }}</span>{% endif %} {{ blocker.title|truncatewords:2 }}
-                            </a>
-                            <form method="post" class="dep-remove" style="display: inline; margin: 0;">{% csrf_token %}<input type="hidden" name="remove_blocked_by" value="{{ blocker.id }}"><button type="submit" style="font-size: 10px; padding: 0; border: none; background: none; color: #d00; cursor: pointer;">×</button></form>
+                        <div style="padding: 3px 4px; margin-bottom: 3px; border-left: 2px solid #e0e0e0; display: flex; justify-content: space-between; align-items: flex-start; gap: 4px;">
+                            <div style="flex: 1; min-width: 0;">
+                                {% if blocker.type == 'subtask' %}
+                                <a href="{% url 'subtask_detail' project=project epic=blocker.epic_id task=blocker.task_id subtask=blocker.id %}" style="font-size: 11px; text-decoration: none; color: #333;">
+                                    {% if blocker.seq_id %}<span class="seq-id" style="font-weight: bold;">{{ blocker.seq_id }}</span>{% endif %} {{ blocker.title }}
+                                </a>
+                                {% else %}
+                                <a href="{% url 'task_detail' project=project epic=blocker.epic_id task=blocker.id %}" style="font-size: 11px; text-decoration: none; color: #333;">
+                                    {% if blocker.seq_id %}<span class="seq-id" style="font-weight: bold;">{{ blocker.seq_id }}</span>{% endif %} {{ blocker.title }}
+                                </a>
+                                {% endif %}
+                                <div style="font-size: 10px; color: #666; margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <span class="badge badge-status status-{{ blocker.status }}" style="font-size: 9px; padding: 1px 3px;">{{ blocker.status }}</span>
+                                    {% if blocker.priority %}<span style="background: #f0f0f0; padding: 1px 3px; border-radius: 2px;">P{{ blocker.priority }}</span>{% endif %}
+                                    {% if blocker.epic_title %}<span style="color: #999;">{{ blocker.epic_title }}</span>{% endif %}
+                                </div>
+                            </div>
+                            <form method="post" class="dep-remove" style="display: inline; margin: 0; flex-shrink: 0;">{% csrf_token %}<input type="hidden" name="remove_blocked_by" value="{{ blocker.id }}"><button type="submit" style="font-size: 11px; padding: 2px 4px; border: none; background: #f0f0f0; color: #d00; cursor: pointer; border-radius: 2px;">×</button></form>
                         </div>
                         {% endfor %}
                     </div>

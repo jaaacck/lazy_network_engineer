@@ -309,6 +309,7 @@
                 <option value="4">P4</option>
                 <option value="5">P5</option>
             </select>
+            <button type="button" id="bulk-apply" class="btn-primary">Apply Changes</button>
             <button type="button" id="bulk-delete" class="btn-danger">Delete</button>
             <button type="button" id="bulk-cancel" class="btn-secondary">Cancel</button>
         </div>
@@ -479,21 +480,33 @@
         cb.addEventListener('change', updateBulkBar);
     });
     
-    // Bulk status change
-    document.getElementById('bulk-status').addEventListener('change', function() {
-        var status = this.value;
-        if (!status) return;
-        
+    // Bulk apply changes - batch all selected actions into one request
+    document.getElementById('bulk-apply').addEventListener('click', function() {
         var ids = getSelectedIds();
         if (ids.length === 0) return;
+        
+        var actions = [];
+        var status = document.getElementById('bulk-status').value;
+        var priority = document.getElementById('bulk-priority').value;
+        
+        if (status) {
+            actions.push({type: 'status', value: status});
+        }
+        if (priority !== '') {
+            actions.push({type: 'priority', value: priority});
+        }
+        
+        if (actions.length === 0) {
+            alert('Please select at least one action to apply.');
+            return;
+        }
         
         var formData = new FormData();
         formData.append('type', 'task');
         formData.append('project_id', '{{ project }}');
         formData.append('epic_id', '{{ epic }}');
         formData.append('ids', ids.join(','));
-        formData.append('action', 'status');
-        formData.append('value', status);
+        formData.append('actions', JSON.stringify(actions));
         formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
         
         fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })
@@ -501,31 +514,13 @@
             .then(function(data) {
                 if (data.success) {
                     location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown error'));
                 }
-            });
-    });
-    
-    // Bulk priority change
-    document.getElementById('bulk-priority').addEventListener('change', function() {
-        var priority = this.value;
-        var ids = getSelectedIds();
-        if (ids.length === 0) return;
-        
-        var formData = new FormData();
-        formData.append('type', 'task');
-        formData.append('project_id', '{{ project }}');
-        formData.append('epic_id', '{{ epic }}');
-        formData.append('ids', ids.join(','));
-        formData.append('action', 'priority');
-        formData.append('value', priority);
-        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
-        
-        fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    location.reload();
-                }
+            })
+            .catch(function(err) {
+                console.error('Bulk update error:', err);
+                alert('Failed to apply changes. Please try again.');
             });
     });
     
@@ -541,7 +536,7 @@
         formData.append('project_id', '{{ project }}');
         formData.append('epic_id', '{{ epic }}');
         formData.append('ids', ids.join(','));
-        formData.append('action', 'delete');
+        formData.append('actions', JSON.stringify([{type: 'delete'}]));
         formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
         
         fetch('{% url "bulk_update_items" %}', { method: 'POST', body: formData })

@@ -1166,6 +1166,27 @@ table tr:last-child td {
 }
 
 /* Sortable tables */
+.sortable-table thead th:first-child {
+    width: 30px;
+    text-align: center;
+}
+
+.sortable-table tbody td:first-child {
+    width: 30px;
+    text-align: center;
+}
+
+.sortable-table thead th:not(:first-child) {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: background-color 0.15s ease;
+}
+
+.sortable-table thead th:not(:first-child):hover {
+    background: #f0f0f0;
+}
+
 .sortable-table .sortable {
     cursor: pointer;
     user-select: none;

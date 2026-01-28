@@ -2,18 +2,71 @@
 {% load static %}
 
 {% block content %}
+<input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+
 <div class="breadcrumb">
     <a href="{% url 'project_list' %}">projects</a> &gt; today
 </div>
 
 <div class="page-title">Today</div>
 
-<div class="section">
+<form id="bulk-edit-toolbar" method="post" action="{% url 'bulk_update_items' %}" style="display:none; margin: 12px 0; padding: 6px 8px; background-color: #f6f6ef; border: 1px solid #e0e0e0; border-top: 3px solid #ff6600;">
+    {% csrf_token %}
+    <input type="hidden" name="selected_ids" id="selected-ids-field">
+    <input type="hidden" name="type" id="item-type-field">
+    <input type="hidden" name="project_id" id="project-id-field">
+    <input type="hidden" name="task_id" id="task-id-field">
+    
+    <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 9pt;">
+        <span id="selection-count" style="font-weight: bold; color: #000;"></span>
+        
+        <div style="display: flex; gap: 6px; align-items: center;">
+            <label for="bulk-status" style="margin: 0; color: #666;">Status:</label>
+            <select name="status" id="bulk-status" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; padding: 3px 6px; border: 1px solid #ddd; background: #fff;">
+                <option value="">— No change —</option>
+                <option value="todo">Todo</option>
+                <option value="in_progress">In Progress</option>
+                <option value="next">Next</option>
+                <option value="on_hold">On Hold</option>
+                <option value="done">Done</option>
+                <option value="blocked">Blocked</option>
+                <option value="cancelled">Cancelled</option>
+            </select>
+        </div>
+        
+        <div style="display: flex; gap: 6px; align-items: center;">
+            <label for="bulk-priority" style="margin: 0; color: #666;">Priority:</label>
+            <select name="priority" id="bulk-priority" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; padding: 3px 6px; border: 1px solid #ddd; background: #fff;">
+                <option value="">— No change —</option>
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3">P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5</option>
+            </select>
+        </div>
+        
+        <div style="display: flex; gap: 6px; align-items: center;">
+            <label for="bulk-due-date" style="margin: 0; color: #666;">Due Date:</label>
+            <input type="date" name="due_date" id="bulk-due-date" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; padding: 3px 6px; border: 1px solid #ddd; background: #fff;">
+            <button type="button" id="bulk-clear-due-date" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; background: none; border: 1px solid #ddd; color: #828282; padding: 3px 6px; cursor: pointer; margin: 0;">Clear</button>
+        </div>
+        
+        <div style="margin-left: auto; display: flex; gap: 6px;">
+            <button type="submit" id="bulk-apply" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; background: none; border: 1px solid #ddd; color: #000; padding: 3px 6px; cursor: pointer; font-weight: bold; margin: 0;">Apply Changes</button>
+            <button type="button" id="bulk-cancel" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; background: none; border: 1px solid #ddd; color: #828282; padding: 3px 6px; cursor: pointer; margin: 0;">Cancel</button>
+        </div>
+    </div>
+</form>
+
+<div class="section" style="min-height: 200px; display: flex; flex-direction: column;">
     <div class="section-title">Due Today</div>
-    {% if today_items %}
+    <div style="flex: 1; display: flex; flex-direction: column;">
+        {% if today_items %}
         <table class="sortable-table">
             <thead>
                 <tr>
+                    <th><input type="checkbox" class="select-all-checkbox" data-section="today"></th>
                     <th>Task Name</th>
                     <th>Status</th>
                     <th>Priority</th>
@@ -37,7 +90,8 @@
                             {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
                         {% endif %}
                     {% endif %}
-                    <tr data-task-url="{{ task_url }}">
+                    <tr data-task-url="{{ task_url }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-project-id="{{ item.project_id }}" data-epic-id="{{ item.epic_id|default:'' }}" data-task-id="{{ item.task_id|default:'' }}">
+                        <td><input type="checkbox" class="item-checkbox" data-section="today"></td>
                         <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
                         <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
                         <td>
@@ -54,17 +108,20 @@
                 {% endfor %}
             </tbody>
         </table>
-    {% else %}
+        {% else %}
         <div class="work-table-empty">No items due today.</div>
-    {% endif %}
+        {% endif %}
+    </div>
 </div>
 
-<div class="section">
+<div class="section" style="min-height: 200px; display: flex; flex-direction: column;">
     <div class="section-title">In Progress</div>
-    {% if in_progress_items %}
+    <div style="flex: 1; display: flex; flex-direction: column;">
+        {% if in_progress_items %}
         <table class="sortable-table">
             <thead>
                 <tr>
+                    <th><input type="checkbox" class="select-all-checkbox" data-section="in_progress"></th>
                     <th>Task Name</th>
                     <th>Status</th>
                     <th>Priority</th>
@@ -88,7 +145,8 @@
                             {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
                         {% endif %}
                     {% endif %}
-                    <tr data-task-url="{{ task_url }}">
+                    <tr data-task-url="{{ task_url }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-project-id="{{ item.project_id }}" data-epic-id="{{ item.epic_id|default:'' }}" data-task-id="{{ item.task_id|default:'' }}">
+                        <td><input type="checkbox" class="item-checkbox" data-section="in_progress"></td>
                         <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
                         <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
                         <td>
@@ -105,17 +163,20 @@
                 {% endfor %}
             </tbody>
         </table>
-    {% else %}
+        {% else %}
         <div class="work-table-empty">No items in progress.</div>
-    {% endif %}
+        {% endif %}
+    </div>
 </div>
 
-<div class="section">
+<div class="section" style="min-height: 200px; display: flex; flex-direction: column;">
     <div class="section-title">Next</div>
-    {% if next_items %}
+    <div style="flex: 1; display: flex; flex-direction: column;">
+        {% if next_items %}
         <table class="sortable-table">
             <thead>
                 <tr>
+                    <th><input type="checkbox" class="select-all-checkbox" data-section="next"></th>
                     <th>Task Name</th>
                     <th>Status</th>
                     <th>Priority</th>
@@ -139,7 +200,8 @@
                             {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
                         {% endif %}
                     {% endif %}
-                    <tr data-task-url="{{ task_url }}">
+                    <tr data-task-url="{{ task_url }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-project-id="{{ item.project_id }}" data-epic-id="{{ item.epic_id|default:'' }}" data-task-id="{{ item.task_id|default:'' }}">
+                        <td><input type="checkbox" class="item-checkbox" data-section="next"></td>
                         <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
                         <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
                         <td>
@@ -156,9 +218,116 @@
                 {% endfor %}
             </tbody>
         </table>
-    {% else %}
+        {% else %}
         <div class="work-table-empty">No items next.</div>
-    {% endif %}
+        {% endif %}
+    </div>
 </div>
 
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const toolbar = document.getElementById('bulk-edit-toolbar');
+    const form = toolbar;
+    const selectionCount = document.getElementById('selection-count');
+    const bulkClearDueDate = document.getElementById('bulk-clear-due-date');
+    const bulkCancelBtn = document.getElementById('bulk-cancel');
+    
+    const itemCheckboxes = document.querySelectorAll('input.item-checkbox');
+    const selectAllCheckboxes = document.querySelectorAll('input.select-all-checkbox');
+    
+    function updateToolbar() {
+        const checkedCount = document.querySelectorAll('input.item-checkbox:checked').length;
+        if (checkedCount > 0) {
+            toolbar.style.display = 'block';
+            selectionCount.textContent = `${checkedCount} item${checkedCount !== 1 ? 's' : ''} selected`;
+        } else {
+            toolbar.style.display = 'none';
+        }
+    }
+    
+    itemCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', updateToolbar);
+    });
+    
+    selectAllCheckboxes.forEach(selectAllCheckbox => {
+        selectAllCheckbox.addEventListener('change', function() {
+            const section = this.dataset.section;
+            const tbody = this.closest('thead').parentElement.querySelector('tbody');
+            const checkboxes = tbody.querySelectorAll(`input.item-checkbox[data-section="${section}"]`);
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = this.checked;
+            });
+            updateToolbar();
+        });
+    });
+    
+    bulkClearDueDate.addEventListener('click', function() {
+        form.querySelector('[name="due_date"]').value = '';
+    });
+    
+    bulkCancelBtn.addEventListener('click', function() {
+        itemCheckboxes.forEach(checkbox => checkbox.checked = false);
+        selectAllCheckboxes.forEach(checkbox => checkbox.checked = false);
+        form.querySelector('[name="status"]').value = '';
+        form.querySelector('[name="priority"]').value = '';
+        form.querySelector('[name="due_date"]').value = '';
+        updateToolbar();
+    });
+    
+    form.addEventListener('submit', function(e) {
+        const checkedItems = document.querySelectorAll('input.item-checkbox:checked');
+        if (checkedItems.length === 0) {
+            e.preventDefault();
+            alert('No items selected');
+            return;
+        }
+        
+        const status = form.querySelector('[name="status"]').value;
+        const priority = form.querySelector('[name="priority"]').value;
+        const dueDate = form.querySelector('[name="due_date"]').value;
+        
+        if (!status && !priority && !dueDate) {
+            e.preventDefault();
+            alert('Please select at least one field to update');
+            return;
+        }
+        
+        // Collect raw item data: id|project_id|item_type|task_id
+        const itemsData = [];
+        checkedItems.forEach(checkbox => {
+            const row = checkbox.closest('tr');
+            const itemId = row.dataset.itemId;
+            const itemType = row.dataset.itemType;
+            const projectId = row.dataset.projectId;
+            const taskId = row.dataset.taskId || '';
+            
+            // Format: id|project_id|type|task_id
+            itemsData.push(`${itemId}|${projectId}|${itemType}|${taskId}`);
+        });
+        
+        // Add hidden field with raw items data (server will group)
+        const itemsInput = document.createElement('input');
+        itemsInput.type = 'hidden';
+        itemsInput.name = 'items_data';
+        itemsInput.value = itemsData.join(',');
+        form.appendChild(itemsInput);
+    });
+    
+    // Initialize table sorting for all sortable tables
+    const tables = document.querySelectorAll('.sortable-table');
+    tables.forEach((table, index) => {
+        // Create a unique ID for each table if it doesn't have one
+        if (!table.id) {
+            table.id = `sortable-table-${index}`;
+        }
+        new TableSorter(`#${table.id}`, {
+            defaultSortColumn: null
+        });
+    });
+});
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'pm/js/table-sort.js' %}"></script>
 {% endblock %}

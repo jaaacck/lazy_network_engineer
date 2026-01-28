@@ -15,8 +15,10 @@ from django.shortcuts import render, redirect
 from django.urls import reverse
 from django.http import JsonResponse, Http404
 from django.core.cache import cache
+from django.contrib import messages
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
+from django.db import transaction
 from .utils import (
     validate_id, safe_join_path, 
     calculate_markdown_progress, calculate_checklist_progress
@@ -839,7 +841,9 @@ def load_task(project_id, task_id, epic_id=None, metadata_only=False):
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
-            query = query.filter(epic_id__isnull=True)
+            # Match both NULL and empty string epic_ids (tasks without an epic)
+            from django.db.models import Q
+            query = query.filter(Q(epic_id__isnull=True) | Q(epic_id=''))
         
         entity = query.get()
         # Build metadata from Entity fields
@@ -917,7 +921,9 @@ def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=Fa
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
-            query = query.filter(epic_id__isnull=True)
+            # Match both NULL and empty string epic_ids (subtasks without an epic)
+            from django.db.models import Q
+            query = query.filter(Q(epic_id__isnull=True) | Q(epic_id=''))
         
         entity = query.get()
         # Build metadata from Entity fields
@@ -3708,137 +3714,198 @@ def update_task_status(request):
 
 
 def bulk_update_items(request):
-    """AJAX endpoint to bulk update tasks or subtasks."""
+    """Handle bulk updates from form POST - groups items server-side."""
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
-    item_type = request.POST.get('type')  # 'task' or 'subtask'
-    project_id = request.POST.get('project_id')
-    epic_id = request.POST.get('epic_id')
-    task_id = request.POST.get('task_id')  # Only needed for subtasks
-    ids = request.POST.get('ids', '')  # Comma-separated item IDs
-    action = request.POST.get('action')  # 'status', 'priority', 'delete'
-    value = request.POST.get('value', '')  # New value for the action
-
-    if not all([item_type, project_id, epic_id, ids, action]):
-        return JsonResponse({'error': 'Missing parameters'}, status=400)
-
-    if not (is_valid_project_id(project_id) and validate_id(epic_id, 'epic')):
-        return JsonResponse({'error': 'Invalid IDs'}, status=400)
-
-    item_ids = [i.strip() for i in ids.split(',') if i.strip()]
-    if not item_ids:
+    # Get form data
+    status = request.POST.get('status', '').strip()
+    priority = request.POST.get('priority', '').strip()
+    due_date = request.POST.get('due_date', '').strip()
+    items_data_str = request.POST.get('items_data', '')  # Format: id|project_id|type|task_id,id|project_id|type|task_id,...
+    
+    if not items_data_str:
         return JsonResponse({'error': 'No items selected'}, status=400)
-
-    # Validate action and value
+    
+    if not (status or priority or due_date):
+        return JsonResponse({'error': 'No actions specified'}, status=400)
+    
+    # Parse items data
+    items_data = []
+    for item_str in items_data_str.split(','):
+        parts = item_str.strip().split('|')
+        if len(parts) < 3:
+            continue
+        items_data.append({
+            'item_id': parts[0],
+            'project_id': parts[1],
+            'item_type': parts[2],
+            'task_id': parts[3] if len(parts) > 3 else ''
+        })
+    
+    if not items_data:
+        return JsonResponse({'error': 'No valid items'}, status=400)
+    
+    # Build actions array
+    actions = []
+    if status:
+        actions.append({'type': 'status', 'value': status})
+    if priority:
+        actions.append({'type': 'priority', 'value': priority})
+    if due_date:
+        actions.append({'type': 'due_date', 'value': due_date})
+    
+    # Validate actions
     valid_statuses = ['todo', 'in_progress', 'done', 'on_hold', 'blocked', 'cancelled', 'next']
     valid_priorities = ['', '1', '2', '3', '4', '5']
     
-    if action == 'status' and value not in valid_statuses:
-        return JsonResponse({'error': 'Invalid status'}, status=400)
-    if action == 'priority' and value not in valid_priorities:
-        return JsonResponse({'error': 'Invalid priority'}, status=400)
-    if action == 'due_date':
-        # Validate date format (YYYY-MM-DD) or empty
-        if value and not re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+    for action in actions:
+        action_type = action['type']
+        action_value = action['value']
+        
+        if action_type == 'status' and action_value not in valid_statuses:
+            return JsonResponse({'error': f'Invalid status: {action_value}'}, status=400)
+        if action_type == 'priority' and action_value not in valid_priorities:
+            return JsonResponse({'error': f'Invalid priority: {action_value}'}, status=400)
+        if action_type == 'due_date' and action_value and not re.match(r'^\d{4}-\d{2}-\d{2}$', action_value):
             return JsonResponse({'error': 'Invalid date format'}, status=400)
-    if action not in ['status', 'priority', 'due_date', 'delete']:
-        return JsonResponse({'error': 'Invalid action'}, status=400)
-
+    
+    # Group items by (project_id, item_type, task_id)
+    groups = {}
+    for item in items_data:
+        key = (item['project_id'], item['item_type'], item['task_id'])
+        if key not in groups:
+            groups[key] = {
+                'project_id': item['project_id'],
+                'item_type': item['item_type'],
+                'task_id': item['task_id'],
+                'item_ids': []
+            }
+        groups[key]['item_ids'].append(item['item_id'])
+    
+    # Process each group
     updated = 0
     try:
-        if item_type == 'task':
-            for t_id in item_ids:
-                if not validate_id(t_id, 'task'):
-                    continue
-                if action == 'delete':
-                    # Delete task and its subtasks from database
-                    try:
-                        task = Entity.objects.get(id=t_id, type='task', project_id=project_id)
-                        # Delete all subtasks first
-                        Entity.objects.filter(type='subtask', project_id=project_id, task_id=t_id).delete()
-                        # Delete the task
-                        task.delete()
-                        updated += 1
-                    except Entity.DoesNotExist:
-                        pass
-                else:
-                    meta, content = load_task(project_id, t_id, epic_id=epic_id)
-                    if meta is None:
-                        continue
-                    if action == 'status':
-                        old_status = meta.get('status', 'todo')
-                        if old_status != value:
-                            meta['status'] = value
-                            add_activity_entry(meta, 'status_changed', old_status, value)
-                    elif action == 'priority':
-                        old_priority = meta.get('priority', '')
-                        if old_priority != value:
-                            if value:
-                                meta['priority'] = value
-                            elif 'priority' in meta:
-                                del meta['priority']
-                            add_activity_entry(meta, 'priority_changed', old_priority, value)
-                    elif action == 'due_date':
-                        old_due_date = meta.get('due_date', '')
-                        if old_due_date != value:
-                            if value:
-                                meta['due_date'] = value
-                            elif 'due_date' in meta:
-                                del meta['due_date']
-                            add_activity_entry(meta, 'due_date_changed', old_due_date, value)
-                    save_task(project_id, t_id, meta, content, epic_id=epic_id)
-                    updated += 1
-                    
-        elif item_type == 'subtask':
-            if not task_id or not validate_id(task_id, 'task'):
-                return JsonResponse({'error': 'Invalid task ID'}, status=400)
-            for s_id in item_ids:
-                if not validate_id(s_id, 'subtask'):
-                    continue
-                if action == 'delete':
-                    # Delete subtask from database
-                    try:
-                        subtask = Entity.objects.get(id=s_id, type='subtask', project_id=project_id, task_id=task_id)
-                        subtask.delete()
-                        updated += 1
-                    except Entity.DoesNotExist:
-                        pass
-                else:
-                    meta, content = load_subtask(project_id, task_id, s_id, epic_id=epic_id)
-                    if meta is None:
-                        continue
-                    if action == 'status':
-                        old_status = meta.get('status', 'todo')
-                        if old_status != value:
-                            meta['status'] = value
-                            add_activity_entry(meta, 'status_changed', old_status, value)
-                    elif action == 'priority':
-                        old_priority = meta.get('priority', '')
-                        if old_priority != value:
-                            if value:
-                                meta['priority'] = value
-                            elif 'priority' in meta:
-                                del meta['priority']
-                            add_activity_entry(meta, 'priority_changed', old_priority, value)
-                    elif action == 'due_date':
-                        old_due_date = meta.get('due_date', '')
-                        if old_due_date != value:
-                            if value:
-                                meta['due_date'] = value
-                            elif 'due_date' in meta:
-                                del meta['due_date']
-                            add_activity_entry(meta, 'due_date_changed', old_due_date, value)
-                    save_subtask(project_id, task_id, s_id, meta, content, epic_id=epic_id)
-                    updated += 1
-        else:
-            return JsonResponse({'error': 'Invalid type'}, status=400)
+        for group_key, group in groups.items():
+            project_id = group['project_id']
+            item_type = group['item_type']
+            task_id = group['task_id']
+            item_ids = group['item_ids']
             
+            # Validate project
+            if not is_valid_project_id(project_id):
+                continue
+            
+            if item_type == 'task':
+                for item_id in item_ids:
+                    if not validate_id(item_id, 'task'):
+                        continue
+                    
+                    try:
+                        task_entity = Entity.objects.get(id=item_id, type='task', project_id=project_id)
+                        actual_epic_id = task_entity.epic_id if task_entity.epic_id else None
+                    except Entity.DoesNotExist:
+                        continue
+                    
+                    # Load and update task
+                    meta, content = load_task(project_id, item_id, epic_id=actual_epic_id)
+                    if meta is None:
+                        continue
+                    
+                    # Apply actions
+                    for action in actions:
+                        action_type = action['type']
+                        action_value = action['value']
+                        
+                        if action_type == 'status':
+                            old_status = meta.get('status', 'todo')
+                            if old_status != action_value:
+                                meta['status'] = action_value
+                                add_activity_entry(meta, 'status_changed', old_status, action_value)
+                        elif action_type == 'priority':
+                            old_priority = meta.get('priority', '')
+                            if old_priority != action_value:
+                                if action_value:
+                                    meta['priority'] = action_value
+                                elif 'priority' in meta:
+                                    del meta['priority']
+                                add_activity_entry(meta, 'priority_changed', old_priority, action_value)
+                        elif action_type == 'due_date':
+                            old_due_date = meta.get('due_date', '')
+                            if old_due_date != action_value:
+                                if action_value:
+                                    meta['due_date'] = action_value
+                                elif 'due_date' in meta:
+                                    del meta['due_date']
+                                add_activity_entry(meta, 'due_date_changed', old_due_date, action_value)
+                    
+                    save_task(project_id, item_id, meta, content, epic_id=actual_epic_id)
+                    updated += 1
+            
+            elif item_type == 'subtask':
+                if not task_id or not validate_id(task_id, 'task'):
+                    continue
+                
+                for item_id in item_ids:
+                    if not validate_id(item_id, 'subtask'):
+                        continue
+                    
+                    try:
+                        subtask_entity = Entity.objects.get(id=item_id, type='subtask', project_id=project_id, task_id=task_id)
+                        actual_epic_id = subtask_entity.epic_id if subtask_entity.epic_id else None
+                    except Entity.DoesNotExist:
+                        continue
+                    
+                    # Load and update subtask
+                    meta, content = load_subtask(project_id, task_id, item_id, epic_id=actual_epic_id)
+                    if meta is None:
+                        continue
+                    
+                    # Apply actions
+                    for action in actions:
+                        action_type = action['type']
+                        action_value = action['value']
+                        
+                        if action_type == 'status':
+                            old_status = meta.get('status', 'todo')
+                            if old_status != action_value:
+                                meta['status'] = action_value
+                                add_activity_entry(meta, 'status_changed', old_status, action_value)
+                        elif action_type == 'priority':
+                            old_priority = meta.get('priority', '')
+                            if old_priority != action_value:
+                                if action_value:
+                                    meta['priority'] = action_value
+                                elif 'priority' in meta:
+                                    del meta['priority']
+                                add_activity_entry(meta, 'priority_changed', old_priority, action_value)
+                        elif action_type == 'due_date':
+                            old_due_date = meta.get('due_date', '')
+                            if old_due_date != action_value:
+                                if action_value:
+                                    meta['due_date'] = action_value
+                                elif 'due_date' in meta:
+                                    del meta['due_date']
+                                add_activity_entry(meta, 'due_date_changed', old_due_date, action_value)
+                    
+                    save_subtask(project_id, task_id, item_id, meta, content, epic_id=actual_epic_id)
+                    updated += 1
+        
+        # Update project stats
+        for group_key in groups.keys():
+            project_id = group_key[0]
+            update_project_stats(project_id)
+        
+        # Invalidate work items cache so my_work view shows fresh data
+        cache.delete('work_items:v3')
+        
+        # Redirect back to my_work with success message in session
+        messages.success(request, f'Updated {updated} item{"s" if updated != 1 else ""}')
+        return redirect('my_work')
+    
     except Exception as e:
         logger.error(f"Error in bulk update: {e}")
         return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'success': True, 'updated': updated})
 
 
 def calendar_week(request, year, week):

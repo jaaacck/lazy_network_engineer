@@ -23,8 +23,12 @@ class TableSorter {
   }
   
   init() {
-    // Attach click handlers to headers
+    // Attach click handlers to headers (skip first column - checkbox)
     this.headers.forEach((header, index) => {
+      // Skip the first column (checkbox column)
+      if (index === 0) {
+        return;
+      }
       header.style.cursor = 'pointer';
       header.addEventListener('click', () => this.sortByColumn(index, header));
     });
@@ -108,8 +112,9 @@ class TableSorter {
   }
   
   updateHeaderIndicators(header) {
-    // Remove all indicators
-    this.headers.forEach(h => {
+    // Remove all indicators (skip first column - checkbox)
+    this.headers.forEach((h, index) => {
+      if (index === 0) return; // Skip checkbox column
       h.dataset.sortIndicator = '';
       h.textContent = h.textContent.replace(/\s*[↑↓]$/, '');
     });
