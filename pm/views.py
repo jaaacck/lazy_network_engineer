@@ -1940,6 +1940,7 @@ def _task_detail_impl(request, project, task, epic=None):
             'seq_id': entity.seq_id or '',
             'title': entity.title or 'Untitled Subtask',
             'status': entity.status_fk.name if entity.status_fk else 'todo',
+            'status_display': get_status_display(entity),
             'priority': entity.priority or '',
             'created': entity.created or '',
             'due_date': entity.due_date or '',

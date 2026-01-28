@@ -200,7 +200,7 @@
                                 {% csrf_token %}
                                 <input type="hidden" name="add_block" value="{{ t.id }}">
                                 <button type="submit" style="font-size: 11px; padding: 2px;">
-                                    {% if t.seq_id %}<span class="seq-id">{{ t.seq_id }}</span>{% endif %} {{ t.title|truncatewords:3 }}
+                                    {% if t.seq_id %}<span class="seq-id">{{ t.seq_id }}</span>{% endif %} {{ t.title|truncatewords:6 }}
                                 </button>
                             </form>
                             {% endfor %}
@@ -276,18 +276,6 @@
                 </div>
             </div>
             {% endif %}
-            <!-- Quick subtask creation -->
-            <form method="post" action="{% if epic %}{% url 'new_subtask' project=project epic=epic task=task %}{% else %}{% url 'new_subtask_no_epic' project=project task=task %}{% endif %}" class="quick-setting-form ajax-create-form" id="new-subtask-form" style="display: flex; gap: 4px; align-items: center; margin-top: 6px;">
-                {% csrf_token %}
-                <input type="text" name="title" placeholder="New subtask..." style="font-size: 11px; padding: 3px 4px; flex: 1;" required>
-                <select name="priority" style="font-size: 11px; padding: 3px 2px;">
-                    <option value="">P</option>
-                    <option value="1">P1</option>
-                    <option value="2">P2</option>
-                    <option value="3">P3</option>
-                </select>
-                <button type="submit" style="font-size: 11px; padding: 3px 8px;">+</button>
-            </form>
         </div>
     </details>
     {% endwith %}
@@ -373,10 +361,32 @@
     </details>
 
     {% if not is_inbox_task %}
-    {% if subtasks %}
     <div class="section">
-        <div class="section-title">Subtasks</div>
-        
+        <div class="section-title">Subtasks (<span id="subtasks-count">{{ subtask_done }}/{{ subtask_total }}</span>)</div>
+        <form method="post" action="{% if epic %}{% url 'new_subtask' project=project epic=epic task=task %}{% else %}{% url 'new_subtask_no_epic' project=project task=task %}{% endif %}" class="quick-setting-form ajax-create-form" id="new-subtask-form">
+            {% csrf_token %}
+            <label for="quick_subtask_title">Subtask</label>
+            <input type="text" name="title" id="quick_subtask_title" placeholder="Subtask title" required>
+            <select name="priority">
+                <option value="">Priority</option>
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3">P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5</option>
+            </select>
+            <select name="status">
+                {% for status in all_subtask_statuses %}
+                <option value="{{ status.name }}">{{ status.display_name }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit">Create</button>
+        </form>
+
+        <div class="progress" id="subtasks-progress"{% if subtask_total == 0 %} style="display: none;"{% endif %}>
+            <div class="progress-bar" id="subtasks-progress-bar" style="width: {{ subtask_progress }}%"></div>
+        </div>
+
         <!-- Bulk Action Bar for Subtasks -->
         <div class="bulk-action-bar" id="subtask-bulk-bar" style="display: none;">
             <span class="bulk-count"><span id="subtask-selected-count">0</span> selected</span>
@@ -400,7 +410,7 @@
             <button type="button" id="subtask-bulk-cancel" class="btn-secondary">Cancel</button>
         </div>
         
-        <table id="subtasks-table" class="sortable-table">
+        <table id="subtasks-table"{% if not subtasks %} style="display: none;"{% endif %} class="sortable-table">
             <thead>
             <tr>
                 <th class="col-checkbox"><input type="checkbox" id="select-all-subtasks" title="Select all"></th>
@@ -429,8 +439,8 @@
             {% endfor %}
             </tbody>
         </table>
+        <div id="subtasks-empty" class="empty"{% if subtasks %} style="display: none;"{% endif %}>No subtasks yet.</div>
     </div>
-    {% endif %}
     {% endif %}
 
     <div class="section">
@@ -627,6 +637,9 @@
 
     // AJAX subtask creation
     var subtaskForm = document.getElementById('new-subtask-form');
+    var totalSubtasks = {{ subtask_total }};
+    var completedSubtasks = {{ subtask_done }};
+    
     if (subtaskForm) {
         subtaskForm.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -646,9 +659,20 @@
                     var table = document.getElementById('subtasks-table');
                     var tbody = document.getElementById('subtasks-tbody');
                     var empty = document.getElementById('subtasks-empty');
+                    var progress = document.getElementById('subtasks-progress');
                     
                     table.style.display = '';
                     empty.style.display = 'none';
+                    progress.style.display = '';
+                    
+                    // Update subtask count
+                    totalSubtasks++;
+                    if (data.status === 'done') completedSubtasks++;
+                    document.getElementById('subtasks-count').textContent = completedSubtasks + '/' + totalSubtasks;
+                    
+                    // Update progress bar
+                    var pct = totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
+                    document.getElementById('subtasks-progress-bar').style.width = pct + '%';
                     
                     // Create new row
                     var tr = document.createElement('tr');
