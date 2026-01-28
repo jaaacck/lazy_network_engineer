@@ -3738,7 +3738,11 @@ def bulk_update_items(request):
         return JsonResponse({'error': 'Invalid status'}, status=400)
     if action == 'priority' and value not in valid_priorities:
         return JsonResponse({'error': 'Invalid priority'}, status=400)
-    if action not in ['status', 'priority', 'delete']:
+    if action == 'due_date':
+        # Validate date format (YYYY-MM-DD) or empty
+        if value and not re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+            return JsonResponse({'error': 'Invalid date format'}, status=400)
+    if action not in ['status', 'priority', 'due_date', 'delete']:
         return JsonResponse({'error': 'Invalid action'}, status=400)
 
     updated = 0
@@ -3775,6 +3779,14 @@ def bulk_update_items(request):
                             elif 'priority' in meta:
                                 del meta['priority']
                             add_activity_entry(meta, 'priority_changed', old_priority, value)
+                    elif action == 'due_date':
+                        old_due_date = meta.get('due_date', '')
+                        if old_due_date != value:
+                            if value:
+                                meta['due_date'] = value
+                            elif 'due_date' in meta:
+                                del meta['due_date']
+                            add_activity_entry(meta, 'due_date_changed', old_due_date, value)
                     save_task(project_id, t_id, meta, content, epic_id=epic_id)
                     updated += 1
                     
@@ -3809,6 +3821,14 @@ def bulk_update_items(request):
                             elif 'priority' in meta:
                                 del meta['priority']
                             add_activity_entry(meta, 'priority_changed', old_priority, value)
+                    elif action == 'due_date':
+                        old_due_date = meta.get('due_date', '')
+                        if old_due_date != value:
+                            if value:
+                                meta['due_date'] = value
+                            elif 'due_date' in meta:
+                                del meta['due_date']
+                            add_activity_entry(meta, 'due_date_changed', old_due_date, value)
                     save_subtask(project_id, task_id, s_id, meta, content, epic_id=epic_id)
                     updated += 1
         else:
@@ -3908,6 +3928,7 @@ def my_work(request):
 
     open_items = []
     in_progress = []
+    on_hold_items = []
     due_soon = []
     overdue = []
 
@@ -3924,10 +3945,12 @@ def my_work(request):
         if due_filter == 'none' and due:
             continue
 
-        if status != 'done':
+        if status not in ['done', 'blocked', 'cancelled', 'on_hold']:
             open_items.append(item)
         if status == 'in_progress':
             in_progress.append(item)
+        if status == 'on_hold':
+            on_hold_items.append(item)
 
         if due:
             if due < today and status != 'done':
@@ -3941,12 +3964,14 @@ def my_work(request):
     
     open_items = sort_by_priority(open_items)
     in_progress = sort_by_priority(in_progress)
+    on_hold_items = sort_by_priority(on_hold_items)
     due_soon = sort_by_priority(due_soon)
     overdue = sort_by_priority(overdue)
 
     return render(request, 'pm/my_work.html', {
         'open_items': open_items,
         'in_progress': in_progress,
+        'on_hold_items': on_hold_items,
         'due_soon': due_soon,
         'overdue': overdue,
         'projects': projects,
@@ -3961,12 +3986,13 @@ def my_work(request):
 
 
 def today_view(request):
-    """Today and Backlog view."""
+    """Today, In Progress, and Next view."""
     items = get_all_work_items()
     today = date.today()
 
     today_items = []
-    backlog = []
+    in_progress_items = []
+    next_items = []
 
     for item in items:
         status = item.get('status')
@@ -3976,19 +4002,23 @@ def today_view(request):
         due = parse_date_safe(item.get('due_date', ''))
         if due == today:
             today_items.append(item)
-        elif not due:
-            backlog.append(item)
+        elif status == 'in_progress':
+            in_progress_items.append(item)
+        elif status == 'next':
+            next_items.append(item)
 
     # Default sort by priority (lower number = higher priority)
     def sort_by_priority(items_list):
         return sorted(items_list, key=lambda x: (x.get('priority') or '999', x.get('title', '')))
     
     today_items = sort_by_priority(today_items)
-    backlog = sort_by_priority(backlog)
+    in_progress_items = sort_by_priority(in_progress_items)
+    next_items = sort_by_priority(next_items)
 
     return render(request, 'pm/today.html', {
         'today_items': today_items,
-        'backlog': backlog,
+        'in_progress_items': in_progress_items,
+        'next_items': next_items,
     })
 
 

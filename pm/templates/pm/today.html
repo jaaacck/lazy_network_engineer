@@ -11,7 +11,7 @@
 <div class="section">
     <div class="section-title">Due Today</div>
     {% if today_items %}
-        <table class="work-table" id="today-table-items">
+        <table class="sortable-table">
             <thead>
                 <tr>
                     <th>Task Name</th>
@@ -60,9 +60,9 @@
 </div>
 
 <div class="section">
-    <div class="section-title">Backlog</div>
-    {% if backlog %}
-        <table class="work-table" id="today-table-backlog">
+    <div class="section-title">In Progress</div>
+    {% if in_progress_items %}
+        <table class="sortable-table">
             <thead>
                 <tr>
                     <th>Task Name</th>
@@ -74,7 +74,7 @@
                 </tr>
             </thead>
             <tbody>
-                {% for item in backlog %}
+                {% for item in in_progress_items %}
                     {% if item.type == 'task' %}
                         {% if item.epic_id %}
                             {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
@@ -106,9 +106,59 @@
             </tbody>
         </table>
     {% else %}
-        <div class="work-table-empty">Backlog is empty.</div>
+        <div class="work-table-empty">No items in progress.</div>
     {% endif %}
 </div>
 
-<script src="{% static 'pm/js/table-sort.js' %}"></script>
+<div class="section">
+    <div class="section-title">Next</div>
+    {% if next_items %}
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Task Name</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Project</th>
+                    <th>Epic</th>
+                    <th>Due Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in next_items %}
+                    {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                            {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
+                        {% else %}
+                            {% url 'task_detail_no_epic' project=item.project_id task=item.id as task_url %}
+                        {% endif %}
+                    {% else %}
+                        {% if item.epic_id %}
+                            {% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id as task_url %}
+                        {% else %}
+                            {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
+                        {% endif %}
+                    {% endif %}
+                    <tr data-task-url="{{ task_url }}">
+                        <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
+                        <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
+                        <td>
+                            {% if item.priority %}
+                                <span class="priority-badge priority-{{ item.priority }}">P{{ item.priority }}</span>
+                            {% else %}
+                                <span class="priority-badge priority-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="project-col">{{ item.project_title|default:item.project_id }}</td>
+                        <td class="epic-col">{{ item.epic_title|default:'—' }}</td>
+                        <td class="due-date">{{ item.due_date|default:'—' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="work-table-empty">No items next.</div>
+    {% endif %}
+</div>
+
 {% endblock %}

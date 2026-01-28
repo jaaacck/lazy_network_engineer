@@ -128,6 +128,11 @@ class TableSorter {
         if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') {
           return;
         }
+        // Don't navigate if clicking on checkbox column (first cell)
+        const clickedCell = e.target.closest('td');
+        if (clickedCell && clickedCell.querySelector('input[type="checkbox"]')) {
+          return;
+        }
         this.handleRowClick(row);
       });
     });
