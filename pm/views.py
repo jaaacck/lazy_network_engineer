@@ -1213,10 +1213,18 @@ def project_detail(request, project):
         save_project(project, metadata, content)
         return redirect('project_detail', project=project)
 
-    # Handle description update
+    # Handle quick updates (status, etc.)
     if request.method == 'POST' and 'quick_update' in request.POST:
         quick_update = request.POST.get('quick_update')
-        if quick_update == 'description':
+        if quick_update == 'status':
+            old_status = metadata.get('status', 'active')
+            new_status = request.POST.get('status', old_status)
+            if old_status != new_status:
+                metadata['status'] = new_status
+                add_activity_entry(metadata, 'status_changed', old_status, new_status)
+                save_project(project, metadata, content)
+            return redirect('project_detail', project=project)
+        elif quick_update == 'description':
             new_content = request.POST.get('description', '').strip()
             content = new_content
             # Extract @mentions from description content
@@ -1399,7 +1407,8 @@ def project_detail(request, project):
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
-        'checklist_total': checklist_total
+        'checklist_total': checklist_total,
+        'all_statuses': get_status_for_entity_type('project')
     })
 
 
@@ -3200,6 +3209,26 @@ def get_project_activity(project_id):
             if content.startswith(prefix):
                 return 'system'
         return 'user'
+    
+    # Query project-level updates first
+    project_updates = Update.objects.filter(entity_id=project_id).order_by('timestamp')
+    for u in project_updates:
+        ts = u.timestamp
+        try:
+            ts_dt = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') if isinstance(ts, str) else ts
+        except ValueError:
+            ts_dt = ts
+        update_type = _derive_update_type(u)
+        activity.append({
+            'type': 'project',
+            'entity_type': 'project',
+            'title': 'Project',
+            'content': u.content,
+            'update_type': update_type,
+            'activity_type': getattr(u, 'activity_type', None),
+            'timestamp': ts_dt,
+            'url': reverse('project_detail', kwargs={'project': project_id})
+        })
     
     # Query all epics in the project
     epics = Entity.objects.filter(type='epic', project_id=project_id)

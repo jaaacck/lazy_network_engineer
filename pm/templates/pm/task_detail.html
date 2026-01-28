@@ -157,7 +157,7 @@
         </div>
     </div>
     
-    <div class="overview-row overview-description" id="description-container" style="position: relative;">
+    <div class="overview-row overview-description" id="description-container" style="position: relative;{% if not content %} display: none;{% endif %}">
         <button class="description-edit-btn" id="description-edit-btn" style="position: absolute; top: 8px; right: 8px;">edit</button>
         <div class="overview-field overview-field-full">
             <span class="field-label">Description</span>
@@ -173,6 +173,14 @@
             </div>
         </div>
     </div>
+
+    {% if not content %}
+    <div class="overview-row" id="description-add-row">
+        <div class="overview-field overview-field-wide">
+            <button class="description-add-btn" id="description-add-btn" style="padding: 10px 16px; background: transparent; border: 2px dashed #d0d0d0; border-radius: 4px; cursor: pointer; font-size: 14px; width: 100%; text-align: left; color: #666;">+ Add description</button>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
     {% if not is_inbox_task %}
@@ -1280,6 +1288,9 @@ if (moveTaskButton && moveTaskModal) {
 
     // Description editing
     var descriptionEditBtn = document.getElementById('description-edit-btn');
+    var descriptionAddBtn = document.getElementById('description-add-btn');
+    var descriptionAddRow = document.getElementById('description-add-row');
+    var descriptionContainer = document.getElementById('description-container');
     var descriptionDisplay = document.getElementById('description-display');
     var descriptionEditorContainer = document.getElementById('description-editor-container');
     var descriptionEditor = document.getElementById('description-editor');
@@ -1287,6 +1298,105 @@ if (moveTaskButton && moveTaskModal) {
     var descriptionCancelBtn = document.getElementById('description-cancel-btn');
     var descriptionMDE = null;
     var originalContent = descriptionEditor ? descriptionEditor.value : '';
+
+    // Handle "Add description" button click
+    if (descriptionAddBtn) {
+        descriptionAddBtn.addEventListener('click', function() {
+            // Hide "Add description" row
+            if (descriptionAddRow) {
+                descriptionAddRow.style.display = 'none';
+            }
+            
+            // Show description container
+            if (descriptionContainer) {
+                descriptionContainer.style.display = 'block';
+            }
+            
+            // Show editor container
+            descriptionEditorContainer.style.display = 'block';
+            
+            // Initialize EasyMDE if not already initialized
+            if (!descriptionMDE && descriptionEditor) {
+                descriptionMDE = new EasyMDE({
+                    element: descriptionEditor,
+                    spellChecker: false,
+                    toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                    minHeight: '200px',
+                    placeholder: 'Enter description... (Markdown supported)',
+                    status: false,
+                    autosave: {
+                        enabled: false
+                    }
+                });
+                originalContent = '';
+                
+                // Initialize @mention autocomplete for description editor
+                initMentionAutocomplete(descriptionMDE);
+                
+                // Handle clipboard image paste (Ctrl+V)
+                descriptionMDE.codemirror.on('paste', function(cm, e) {
+                    var clipboardData = e.clipboardData || window.clipboardData;
+                    if (!clipboardData) return;
+                    
+                    var items = clipboardData.items;
+                    if (!items) return;
+                    
+                    // Check if clipboard contains image
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            e.preventDefault();
+                            var file = items[i].getAsFile();
+                            
+                            // Show loading indicator
+                            var cursor = cm.getCursor();
+                            var loadingText = '![Uploading image...]()';
+                            cm.replaceRange(loadingText, cursor);
+                            
+                            // Upload image
+                            var formData = new FormData();
+                            formData.append('image', file);
+                            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                            
+                            fetch('{% url "upload_image" %}', {
+                                method: 'POST',
+                                body: formData,
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                }
+                            })
+                            .then(function(response) {
+                                return response.json();
+                            })
+                            .then(function(data) {
+                                if (data.success) {
+                                    // Replace loading text with markdown image
+                                    var markdownImage = '![' + file.name + '](' + data.url + ')';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, markdownImage);
+                                    cm.setValue(content);
+                                } else {
+                                    // Replace loading text with error message
+                                    var errorText = '![Image upload failed: ' + (data.error || 'Unknown error') + ']()';
+                                    var content = cm.getValue();
+                                    content = content.replace(loadingText, errorText);
+                                    cm.setValue(content);
+                                }
+                            })
+                            .catch(function(err) {
+                                // Replace loading text with error message
+                                var errorText = '![Image upload failed: Network error]()';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, errorText);
+                                cm.setValue(content);
+                            });
+                            
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+    }
 
     if (descriptionEditBtn && descriptionEditor) {
         descriptionEditBtn.addEventListener('click', function() {
