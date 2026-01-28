@@ -3003,40 +3003,82 @@ def parse_date_safe(value):
 
 def get_all_work_items():
     """Return all tasks and subtasks with metadata for work views."""
-    cache_key = "work_items:v2"
+    cache_key = "work_items:v3"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     items = []
 
-    # Query all tasks
-    tasks = Entity.objects.filter(type='task').prefetch_related('labels')
+    # Query all tasks with project and epic data
+    tasks = Entity.objects.filter(type='task').select_related('status_fk').prefetch_related('labels')
     for task in tasks:
+        # Get project title
+        project_title = ''
+        if task.project_id:
+            try:
+                project_entity = Entity.objects.get(id=task.project_id, type='project')
+                project_title = project_entity.title or task.project_id
+            except Entity.DoesNotExist:
+                project_title = task.project_id
+        
+        # Get epic title
+        epic_title = ''
+        if task.epic_id:
+            try:
+                epic_entity = Entity.objects.get(id=task.epic_id, type='epic')
+                epic_title = epic_entity.title or task.epic_id
+            except Entity.DoesNotExist:
+                epic_title = task.epic_id
+        
         items.append({
             'type': 'task',
             'id': task.id,
             'title': task.title or 'Untitled Task',
             'status': task.status_fk.name if task.status_fk else 'todo',
+            'status_display': task.status_fk.display_name if task.status_fk else 'Todo',
             'priority': task.priority or '',
             'due_date': task.due_date or '',
             'project_id': task.project_id,
+            'project_title': project_title,
             'epic_id': task.epic_id,
+            'epic_title': epic_title,
         })
 
-    # Query all subtasks
-    subtasks = Entity.objects.filter(type='subtask').prefetch_related('labels')
+    # Query all subtasks with project and epic data
+    subtasks = Entity.objects.filter(type='subtask').select_related('status_fk').prefetch_related('labels')
     for subtask in subtasks:
+        # Get project title
+        project_title = ''
+        if subtask.project_id:
+            try:
+                project_entity = Entity.objects.get(id=subtask.project_id, type='project')
+                project_title = project_entity.title or subtask.project_id
+            except Entity.DoesNotExist:
+                project_title = subtask.project_id
+        
+        # Get epic title
+        epic_title = ''
+        if subtask.epic_id:
+            try:
+                epic_entity = Entity.objects.get(id=subtask.epic_id, type='epic')
+                epic_title = epic_entity.title or subtask.epic_id
+            except Entity.DoesNotExist:
+                epic_title = subtask.epic_id
+        
         items.append({
             'type': 'subtask',
             'id': subtask.id,
             'seq_id': subtask.seq_id or '',
             'title': subtask.title or 'Untitled Subtask',
             'status': subtask.status_fk.name if subtask.status_fk else 'todo',
+            'status_display': subtask.status_fk.display_name if subtask.status_fk else 'Todo',
             'priority': subtask.priority or '',
             'due_date': subtask.due_date or '',
             'project_id': subtask.project_id,
+            'project_title': project_title,
             'epic_id': subtask.epic_id,
+            'epic_title': epic_title,
             'task_id': subtask.task_id,
         })
 
@@ -3893,6 +3935,15 @@ def my_work(request):
             elif today <= due <= due_soon_cutoff and status != 'done':
                 due_soon.append(item)
 
+    # Default sort by priority (lower number = higher priority)
+    def sort_by_priority(items_list):
+        return sorted(items_list, key=lambda x: (x.get('priority') or '999', x.get('title', '')))
+    
+    open_items = sort_by_priority(open_items)
+    in_progress = sort_by_priority(in_progress)
+    due_soon = sort_by_priority(due_soon)
+    overdue = sort_by_priority(overdue)
+
     return render(request, 'pm/my_work.html', {
         'open_items': open_items,
         'in_progress': in_progress,
@@ -3927,6 +3978,13 @@ def today_view(request):
             today_items.append(item)
         elif not due:
             backlog.append(item)
+
+    # Default sort by priority (lower number = higher priority)
+    def sort_by_priority(items_list):
+        return sorted(items_list, key=lambda x: (x.get('priority') or '999', x.get('title', '')))
+    
+    today_items = sort_by_priority(today_items)
+    backlog = sort_by_priority(backlog)
 
     return render(request, 'pm/today.html', {
         'today_items': today_items,

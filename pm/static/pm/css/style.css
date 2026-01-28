@@ -1183,6 +1183,221 @@ table tr:last-child td {
     color: #828282;
 }
 
+/* Work item tables */
+.work-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+    margin-top: 6px;
+    background: #fff;
+}
+
+.work-table thead th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid #ddd;
+    font-weight: bold;
+    background: #f9f9f9;
+    color: #000;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.work-table thead th:hover {
+    background: #f0f0f0;
+}
+
+.work-table tbody tr {
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+}
+
+.work-table tbody tr:hover {
+    background: #fafafa;
+}
+
+.work-table tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: middle;
+}
+
+.work-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Task name column */
+.work-table .task-name {
+    font-weight: 500;
+    color: #002ee8;
+    max-width: 300px;
+    word-break: break-word;
+}
+
+.work-table .task-name a {
+    color: #002ee8;
+    text-decoration: none;
+}
+
+.work-table .task-name a:hover {
+    text-decoration: underline;
+}
+
+/* Status badges */
+.work-table .status-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 8pt;
+    font-weight: bold;
+    text-align: center;
+    min-width: 60px;
+}
+
+.work-table .status-todo {
+    background: #ffffcc;
+    color: #333;
+}
+
+.work-table .status-in_progress {
+    background: #cce5ff;
+    color: #003366;
+}
+
+.work-table .status-done {
+    background: #ccffcc;
+    color: #003300;
+}
+
+.work-table .status-on_hold {
+    background: #e6ccff;
+    color: #330066;
+}
+
+.work-table .status-blocked {
+    background: #ffcccc;
+    color: #660000;
+}
+
+.work-table .status-cancelled {
+    background: #cccccc;
+    color: #333;
+}
+
+.work-table .status-next {
+    background: #cce5ff;
+    color: #003366;
+}
+
+/* Priority badges */
+.work-table .priority-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 8pt;
+    font-weight: bold;
+    text-align: center;
+    min-width: 35px;
+}
+
+.work-table .priority-1 {
+    background: #ff0000;
+    color: #fff;
+}
+
+.work-table .priority-2 {
+    background: #ff6600;
+    color: #fff;
+}
+
+.work-table .priority-3 {
+    background: #ffaa00;
+    color: #000;
+}
+
+.work-table .priority-4 {
+    background: #ffcc00;
+    color: #000;
+}
+
+.work-table .priority-5 {
+    background: #ffff00;
+    color: #000;
+}
+
+.work-table .priority-empty {
+    background: #e8e8e8;
+    color: #666;
+    font-style: italic;
+}
+
+/* Project and Epic columns */
+.work-table .project-col,
+.work-table .epic-col {
+    color: #666;
+    font-size: 8pt;
+    max-width: 150px;
+    word-break: break-word;
+}
+
+/* Due date column */
+.work-table .due-date {
+    color: #666;
+    font-size: 8pt;
+    white-space: nowrap;
+}
+
+.work-table .due-date.overdue {
+    color: #ff0000;
+    font-weight: bold;
+}
+
+.work-table .due-date.due-soon {
+    color: #ff6600;
+    font-weight: bold;
+}
+
+/* Empty state */
+.work-table-empty {
+    padding: 20px;
+    text-align: center;
+    color: #828282;
+    font-style: italic;
+}
+
+/* Responsive for smaller screens */
+@media (max-width: 900px) {
+    .work-table {
+        font-size: 8pt;
+    }
+    
+    .work-table thead th,
+    .work-table tbody td {
+        padding: 6px 8px;
+    }
+    
+    .work-table .task-name {
+        max-width: 150px;
+    }
+    
+    .work-table .project-col,
+    .work-table .epic-col {
+        max-width: 100px;
+    }
+}
+
+@media (max-width: 600px) {
+    .work-table {
+        font-size: 7pt;
+    }
+    
+    .work-table thead th,
+    .work-table tbody td {
+        padding: 4px 6px;
+    }
+}
+
 .text-muted {
     color: #828282;
     font-style: italic;

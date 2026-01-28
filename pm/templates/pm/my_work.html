@@ -1,4 +1,5 @@
 {% extends "pm/base.html" %}
+{% load static %}
 
 {% block content %}
 <div class="breadcrumb">
@@ -73,143 +74,214 @@
     </form>
 </details>
 
+{% comment %}
+Helper template to render work item tables
+Include directly in sections below
+{% endcomment %}
+
 <div class="section">
     <div class="section-title">Open</div>
     {% if open_items %}
-    <div class="item-list">
-        {% for item in open_items %}
-        <div class="item">
-            <div class="item-title">
-                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
-                {% if item.type == 'task' %}
-                {% if item.epic_id %}
-                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% else %}
-                {% if item.epic_id %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
-                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
-            </div>
-            {% if item.due_date %}
-            <div class="item-meta">Due: {{ item.due_date }}</div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
+        <table class="work-table" id="work-table-open">
+            <thead>
+                <tr>
+                    <th>Task Name</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Project</th>
+                    <th>Epic</th>
+                    <th>Due Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in open_items %}
+                    {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                            {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
+                        {% else %}
+                            {% url 'task_detail_no_epic' project=item.project_id task=item.id as task_url %}
+                        {% endif %}
+                    {% else %}
+                        {% if item.epic_id %}
+                            {% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id as task_url %}
+                        {% else %}
+                            {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
+                        {% endif %}
+                    {% endif %}
+                    <tr data-task-url="{{ task_url }}">
+                        <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
+                        <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
+                        <td>
+                            {% if item.priority %}
+                                <span class="priority-badge priority-{{ item.priority }}">P{{ item.priority }}</span>
+                            {% else %}
+                                <span class="priority-badge priority-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="project-col">{{ item.project_title|default:item.project_id }}</td>
+                        <td class="epic-col">{{ item.epic_title|default:'—' }}</td>
+                        <td class="due-date">{{ item.due_date|default:'—' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% else %}
-    <div class="empty">No open items.</div>
+        <div class="work-table-empty">No open items.</div>
     {% endif %}
 </div>
 
 <div class="section">
     <div class="section-title">In Progress</div>
     {% if in_progress %}
-    <div class="item-list">
-        {% for item in in_progress %}
-        <div class="item">
-            <div class="item-title">
-                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
-                {% if item.type == 'task' %}
-                {% if item.epic_id %}
-                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% else %}
-                {% if item.epic_id %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
-                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
-            </div>
-            {% if item.due_date %}
-            <div class="item-meta">Due: {{ item.due_date }}</div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
+        <table class="work-table" id="work-table-in-progress">
+            <thead>
+                <tr>
+                    <th>Task Name</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Project</th>
+                    <th>Epic</th>
+                    <th>Due Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in in_progress %}
+                    {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                            {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
+                        {% else %}
+                            {% url 'task_detail_no_epic' project=item.project_id task=item.id as task_url %}
+                        {% endif %}
+                    {% else %}
+                        {% if item.epic_id %}
+                            {% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id as task_url %}
+                        {% else %}
+                            {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
+                        {% endif %}
+                    {% endif %}
+                    <tr data-task-url="{{ task_url }}">
+                        <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
+                        <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
+                        <td>
+                            {% if item.priority %}
+                                <span class="priority-badge priority-{{ item.priority }}">P{{ item.priority }}</span>
+                            {% else %}
+                                <span class="priority-badge priority-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="project-col">{{ item.project_title|default:item.project_id }}</td>
+                        <td class="epic-col">{{ item.epic_title|default:'—' }}</td>
+                        <td class="due-date">{{ item.due_date|default:'—' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% else %}
-    <div class="empty">No items in progress.</div>
+        <div class="work-table-empty">No items in progress.</div>
     {% endif %}
 </div>
 
 <div class="section">
     <div class="section-title">Due Soon (7 days)</div>
     {% if due_soon %}
-    <div class="item-list">
-        {% for item in due_soon %}
-        <div class="item">
-            <div class="item-title">
-                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
-                {% if item.type == 'task' %}
-                {% if item.epic_id %}
-                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% else %}
-                {% if item.epic_id %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
-                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
-            </div>
-            {% if item.due_date %}
-            <div class="item-meta">Due: {{ item.due_date }}</div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
+        <table class="work-table" id="work-table-due-soon">
+            <thead>
+                <tr>
+                    <th>Task Name</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Project</th>
+                    <th>Epic</th>
+                    <th>Due Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in due_soon %}
+                    {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                            {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
+                        {% else %}
+                            {% url 'task_detail_no_epic' project=item.project_id task=item.id as task_url %}
+                        {% endif %}
+                    {% else %}
+                        {% if item.epic_id %}
+                            {% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id as task_url %}
+                        {% else %}
+                            {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
+                        {% endif %}
+                    {% endif %}
+                    <tr data-task-url="{{ task_url }}">
+                        <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
+                        <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
+                        <td>
+                            {% if item.priority %}
+                                <span class="priority-badge priority-{{ item.priority }}">P{{ item.priority }}</span>
+                            {% else %}
+                                <span class="priority-badge priority-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="project-col">{{ item.project_title|default:item.project_id }}</td>
+                        <td class="epic-col">{{ item.epic_title|default:'—' }}</td>
+                        <td class="due-date">{{ item.due_date|default:'—' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% else %}
-    <div class="empty">No items due soon.</div>
+        <div class="work-table-empty">No items due soon.</div>
     {% endif %}
 </div>
 
 <div class="section">
     <div class="section-title">Overdue</div>
     {% if overdue %}
-    <div class="item-list">
-        {% for item in overdue %}
-        <div class="item">
-            <div class="item-title">
-                {% if item.seq_id %}<span class="seq-id">{{ item.seq_id }}</span>{% endif %}
-                {% if item.type == 'task' %}
-                {% if item.epic_id %}
-                <a href="{% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'task_detail_no_epic' project=item.project_id task=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% else %}
-                {% if item.epic_id %}
-                <a href="{% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% else %}
-                <a href="{% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id %}">{{ item.title }}</a>
-                {% endif %}
-                {% endif %}
-                <span class="badge badge-status status-{{ item.status }}">{{ item.status_display|default:item.status }}</span>
-                {% if item.priority %}<span class="badge badge-priority priority-{{ item.priority }}">P{{ item.priority }}</span>{% endif %}
-            </div>
-            {% if item.due_date %}
-            <div class="item-meta">Due: {{ item.due_date }}</div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
+        <table class="work-table" id="work-table-overdue">
+            <thead>
+                <tr>
+                    <th>Task Name</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Project</th>
+                    <th>Epic</th>
+                    <th>Due Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in overdue %}
+                    {% if item.type == 'task' %}
+                        {% if item.epic_id %}
+                            {% url 'task_detail' project=item.project_id epic=item.epic_id task=item.id as task_url %}
+                        {% else %}
+                            {% url 'task_detail_no_epic' project=item.project_id task=item.id as task_url %}
+                        {% endif %}
+                    {% else %}
+                        {% if item.epic_id %}
+                            {% url 'subtask_detail' project=item.project_id epic=item.epic_id task=item.task_id subtask=item.id as task_url %}
+                        {% else %}
+                            {% url 'subtask_detail_no_epic' project=item.project_id task=item.task_id subtask=item.id as task_url %}
+                        {% endif %}
+                    {% endif %}
+                    <tr data-task-url="{{ task_url }}">
+                        <td class="task-name"><a href="{{ task_url }}">{{ item.title }}</a></td>
+                        <td><span class="status-badge status-{{ item.status }}">{{ item.status_display|default:item.status }}</span></td>
+                        <td>
+                            {% if item.priority %}
+                                <span class="priority-badge priority-{{ item.priority }}">P{{ item.priority }}</span>
+                            {% else %}
+                                <span class="priority-badge priority-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="project-col">{{ item.project_title|default:item.project_id }}</td>
+                        <td class="epic-col">{{ item.epic_title|default:'—' }}</td>
+                        <td class="due-date">{{ item.due_date|default:'—' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% else %}
-    <div class="empty">No overdue items.</div>
+        <div class="work-table-empty">No overdue items.</div>
     {% endif %}
 </div>
+
+<script src="{% static 'pm/js/table-sort.js' %}"></script>
 {% endblock %}
