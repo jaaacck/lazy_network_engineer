@@ -3718,42 +3718,76 @@ def bulk_update_items(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
-    # Get form data
-    status = request.POST.get('status', '').strip()
-    priority = request.POST.get('priority', '').strip()
-    due_date = request.POST.get('due_date', '').strip()
-    items_data_str = request.POST.get('items_data', '')  # Format: id|project_id|type|task_id,id|project_id|type|task_id,...
+    # Handle two different input formats:
+    # 1. From my_work/today: items_data, status, priority, due_date
+    # 2. From task_detail/epic_detail: ids, actions, type, project_id, epic_id, task_id
     
-    if not items_data_str:
-        return JsonResponse({'error': 'No items selected'}, status=400)
+    items_data_str = request.POST.get('items_data', '')
     
-    if not (status or priority or due_date):
-        return JsonResponse({'error': 'No actions specified'}, status=400)
-    
-    # Parse items data
-    items_data = []
-    for item_str in items_data_str.split(','):
-        parts = item_str.strip().split('|')
-        if len(parts) < 3:
-            continue
-        items_data.append({
-            'item_id': parts[0],
-            'project_id': parts[1],
-            'item_type': parts[2],
-            'task_id': parts[3] if len(parts) > 3 else ''
-        })
-    
-    if not items_data:
-        return JsonResponse({'error': 'No valid items'}, status=400)
-    
-    # Build actions array
-    actions = []
-    if status:
-        actions.append({'type': 'status', 'value': status})
-    if priority:
-        actions.append({'type': 'priority', 'value': priority})
-    if due_date:
-        actions.append({'type': 'due_date', 'value': due_date})
+    # Check if this is the AJAX format from task_detail/epic_detail
+    if not items_data_str and request.POST.get('ids'):
+        # AJAX format from task/epic detail pages
+        ids = request.POST.get('ids', '').strip()
+        item_type = request.POST.get('type', '').strip()
+        project_id = request.POST.get('project_id', '').strip()
+        epic_id = request.POST.get('epic_id', '').strip()
+        task_id = request.POST.get('task_id', '').strip()
+        actions_str = request.POST.get('actions', '')
+        
+        if not ids:
+            return JsonResponse({'error': 'No items selected'}, status=400)
+        
+        try:
+            actions = json.loads(actions_str) if actions_str else []
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid actions format'}, status=400)
+        
+        if not actions:
+            return JsonResponse({'error': 'No actions specified'}, status=400)
+        
+        # Convert to items_data format
+        items_data = []
+        for item_id in ids.split(','):
+            if item_id.strip():
+                items_data.append({
+                    'item_id': item_id.strip(),
+                    'project_id': project_id,
+                    'item_type': item_type,
+                    'task_id': task_id if item_type == 'subtask' else ''
+                })
+    else:
+        # Form POST format from my_work/today
+        if not items_data_str:
+            return JsonResponse({'error': 'No items selected'}, status=400)
+        
+        status = request.POST.get('status', '').strip()
+        priority = request.POST.get('priority', '').strip()
+        due_date = request.POST.get('due_date', '').strip()
+        
+        if not (status or priority or due_date):
+            return JsonResponse({'error': 'No actions specified'}, status=400)
+        
+        # Parse items data
+        items_data = []
+        for item_str in items_data_str.split(','):
+            parts = item_str.strip().split('|')
+            if len(parts) < 3:
+                continue
+            items_data.append({
+                'item_id': parts[0],
+                'project_id': parts[1],
+                'item_type': parts[2],
+                'task_id': parts[3] if len(parts) > 3 else ''
+            })
+        
+        # Build actions array
+        actions = []
+        if status:
+            actions.append({'type': 'status', 'value': status})
+        if priority:
+            actions.append({'type': 'priority', 'value': priority})
+        if due_date:
+            actions.append({'type': 'due_date', 'value': due_date})
     
     # Validate actions
     valid_statuses = ['todo', 'in_progress', 'done', 'on_hold', 'blocked', 'cancelled', 'next']
@@ -3899,15 +3933,26 @@ def bulk_update_items(request):
         # Invalidate work items cache so work views show fresh data
         cache.delete('work_items:v3')
         
-        # Redirect back to the referring page with success message in session
-        messages.success(request, f'Updated {updated} item{"s" if updated != 1 else ""}')
+        # Check if this is an AJAX request (from task_detail/epic_detail)
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.POST.get('ids')
         
-        # Determine where to redirect based on the referrer
-        referrer = request.META.get('HTTP_REFERER', '')
-        if 'today' in referrer:
-            return redirect('today')
+        if is_ajax:
+            # Return JSON response for AJAX requests
+            return JsonResponse({
+                'success': True,
+                'updated': updated,
+                'message': f'Updated {updated} item{"s" if updated != 1 else ""}'
+            })
         else:
-            return redirect('my_work')
+            # Redirect back to the referring page with success message for form submissions
+            messages.success(request, f'Updated {updated} item{"s" if updated != 1 else ""}')
+            
+            # Determine where to redirect based on the referrer
+            referrer = request.META.get('HTTP_REFERER', '')
+            if 'today' in referrer:
+                return redirect('today')
+            else:
+                return redirect('my_work')
     
     except Exception as e:
         logger.error(f"Error in bulk update: {e}")
