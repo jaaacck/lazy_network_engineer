@@ -3896,12 +3896,18 @@ def bulk_update_items(request):
             project_id = group_key[0]
             update_project_stats(project_id)
         
-        # Invalidate work items cache so my_work view shows fresh data
+        # Invalidate work items cache so work views show fresh data
         cache.delete('work_items:v3')
         
-        # Redirect back to my_work with success message in session
+        # Redirect back to the referring page with success message in session
         messages.success(request, f'Updated {updated} item{"s" if updated != 1 else ""}')
-        return redirect('my_work')
+        
+        # Determine where to redirect based on the referrer
+        referrer = request.META.get('HTTP_REFERER', '')
+        if 'today' in referrer:
+            return redirect('today')
+        else:
+            return redirect('my_work')
     
     except Exception as e:
         logger.error(f"Error in bulk update: {e}")
