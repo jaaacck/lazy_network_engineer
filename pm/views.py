@@ -2276,6 +2276,9 @@ def _task_detail_impl(request, project, task, epic=None):
     all_notes = get_all_notes_in_system()
     available_notes = [n for n in all_notes if n['id'] not in note_ids]
 
+    # Determine if Actions & Relationships section should default to open
+    show_actions_success = request.session.pop('subtask_created_success', False)
+
     return render(request, 'pm/task_detail.html', {
         'metadata': metadata,
         'content': content,
@@ -2311,7 +2314,8 @@ def _task_detail_impl(request, project, task, epic=None):
         'subtask_progress': subtask_progress,
         'overall_progress': overall_progress,
         'total_items': total_items,
-        'is_inbox_task': is_inbox_task
+        'is_inbox_task': is_inbox_task,
+        'show_actions_success': show_actions_success
     })
 
 
@@ -2361,6 +2365,9 @@ def _new_subtask_impl(request, project, task, epic=None):
         # Add creation activity
         add_activity_entry(metadata, 'created')
         save_subtask(project, task, subtask_id, metadata, content, epic_id=epic)
+
+        # Set success flag for session to open Actions & Relationships section
+        request.session['subtask_created_success'] = True
 
         # Return JSON for AJAX requests
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
@@ -2815,6 +2822,9 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
     all_notes = get_all_notes_in_system()
     available_notes = [n for n in all_notes if n['id'] not in note_ids]
 
+    # Determine if Actions & Relationships section should default to open
+    show_actions_success = request.session.pop('subtask_created_success', False)
+
     return render(request, 'pm/subtask_detail.html', {
         'metadata': metadata,
         'content': content,
@@ -2843,7 +2853,8 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
         'markdown_progress': markdown_progress,
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
-        'checklist_total': checklist_total
+        'checklist_total': checklist_total,
+        'show_actions_success': show_actions_success
     })
 
 
