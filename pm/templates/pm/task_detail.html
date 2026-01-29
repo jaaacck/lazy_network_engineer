@@ -414,9 +414,9 @@
             <thead>
             <tr>
                 <th class="col-checkbox"><input type="checkbox" id="select-all-subtasks" title="Select all"></th>
+                <th class="sortable" data-sort="title">Subtask <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="status">Status <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="priority">Priority <span class="sort-indicator">↕</span></th>
-                <th class="sortable" data-sort="title">Subtask <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="created">Created <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="due_date">Due Date <span class="sort-indicator">↕</span></th>
             </tr>
@@ -430,9 +430,9 @@
                 data-created="{{ subtask.created|default:'9999-99-99' }}" 
                 data-due-date="{{ subtask.due_date|default:'9999-99-99' }}">
                 <td class="col-checkbox"><input type="checkbox" class="subtask-checkbox" value="{{ subtask.id }}"></td>
+                <td>{% if subtask.seq_id %}<span class="seq-id">{{ subtask.seq_id }}</span>{% endif %}{% if epic %}<a href="{% url 'subtask_detail' project=project epic=epic task=task subtask=subtask.id %}">{{ subtask.title }}</a>{% else %}<a href="{% url 'subtask_detail_no_epic' project=project task=task subtask=subtask.id %}">{{ subtask.title }}</a>{% endif %}</td>
                 <td><span class="badge badge-status status-{{ subtask.status }}">{{ subtask.status_display|default:subtask.status }}</span></td>
                 <td>{% if subtask.priority %}<span class="badge badge-priority priority-{{ subtask.priority }}">P{{ subtask.priority }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                <td>{% if subtask.seq_id %}<span class="seq-id">{{ subtask.seq_id }}</span>{% endif %}{% if epic %}<a href="{% url 'subtask_detail' project=project epic=epic task=task subtask=subtask.id %}">{{ subtask.title }}</a>{% else %}<a href="{% url 'subtask_detail_no_epic' project=project task=task subtask=subtask.id %}">{{ subtask.title }}</a>{% endif %}</td>
                 <td>{% if subtask.created %}{{ subtask.created }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                 <td>{% if subtask.due_date %}{{ subtask.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
             </tr>
