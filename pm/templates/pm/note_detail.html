@@ -11,6 +11,7 @@
 <div class="page-title">
     <span>{{ metadata.title }}</span>
     <div class="mode-toggle">
+        <button id="note-edit-btn">edit</button>
         <form method="post" action="{% url 'delete_note' note_id=note_id %}">
             {% csrf_token %}
             <button type="submit" onclick="return confirm('Delete this note?')">delete</button>
@@ -88,18 +89,25 @@
     </div>
 </div>
 
-    {% if content %}
-    <div class="section">
-        <div class="content">
-            {{ content|markdownify|safe }}
+    <div class="section" id="note-content-container" style="position: relative;{% if not content %} display: none;{% endif %}">
+        <button class="description-edit-btn" id="note-edit-icon-btn" style="position: absolute; top: 8px; right: 8px; display: none;">edit</button>
+        <div class="content" id="note-display">
+            {% if content %}{{ content|markdownify|safe }}{% else %}<span style="color: #828282;">No content</span>{% endif %}
+        </div>
+        <div id="note-editor-container" style="display: none; margin-top: 10px;">
+            <textarea id="note-editor">{% if content %}{{ content }}{% endif %}</textarea>
+            <div class="description-actions" style="margin-top: 10px;">
+                <button type="button" id="note-save-btn">Save</button>
+                <button type="button" id="note-cancel-btn">Cancel</button>
+            </div>
         </div>
     </div>
-    {% else %}
-    <div class="empty">No content yet.</div>
+    {% if not content %}
+    <div class="empty" id="note-empty">No content yet.</div>
     {% endif %}
     
     <!-- Create Projects, Epics, Tasks Section -->
-    <details class="section compact-section"{% if note_project or note_epics or note_tasks %} open{% endif %}>
+    <details class="section compact-section">
         <summary class="section-title">Create from Note</summary>
         <div class="note-creation-section">
             <!-- Project Selection/Creation -->
@@ -488,6 +496,309 @@
 {% endblock %}
 
 {% block scripts %}
+
+<script>
+    // Note content inline editing
+    var noteEditBtn = document.getElementById('note-edit-btn');
+    var noteEditIconBtn = document.getElementById('note-edit-icon-btn');
+    var noteContentContainer = document.getElementById('note-content-container');
+    var noteDisplay = document.getElementById('note-display');
+    var noteEditorContainer = document.getElementById('note-editor-container');
+    var noteEditor = document.getElementById('note-editor');
+    var noteSaveBtn = document.getElementById('note-save-btn');
+    var noteCancelBtn = document.getElementById('note-cancel-btn');
+    var noteEmpty = document.getElementById('note-empty');
+    var noteMDE = null;
+    var noteOriginalContent = noteEditor ? noteEditor.value : '';
+
+    function initializeNoteEditor() {
+        if (!noteMDE && noteEditor) {
+            noteMDE = new EasyMDE({
+                element: noteEditor,
+                spellChecker: false,
+                toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                minHeight: '300px',
+                placeholder: 'Enter note content... (Markdown supported)',
+                status: false,
+                autosave: {
+                    enabled: false
+                }
+            });
+
+            // Handle clipboard image paste (Ctrl+V)
+            noteMDE.codemirror.on('paste', function(cm, e) {
+                var clipboardData = e.clipboardData || window.clipboardData;
+                if (!clipboardData) return;
+                
+                var items = clipboardData.items;
+                if (!items) return;
+                
+                // Check if clipboard contains image
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        var file = items[i].getAsFile();
+                        
+                        // Show loading indicator
+                        var cursor = cm.getCursor();
+                        var loadingText = '![Uploading image...]()';
+                        cm.replaceRange(loadingText, cursor);
+                        
+                        // Upload image
+                        var formData = new FormData();
+                        formData.append('image', file);
+                        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                        
+                        fetch('{% url "upload_image" %}', {
+                            method: 'POST',
+                            body: formData,
+                            headers: {
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        })
+                        .then(function(response) {
+                            return response.json();
+                        })
+                        .then(function(data) {
+                            if (data.success) {
+                                // Replace loading text with markdown image
+                                var markdownImage = '![' + file.name + '](' + data.url + ')';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, markdownImage);
+                                cm.setValue(content);
+                            } else {
+                                // Replace loading text with error message
+                                var errorText = '![Image upload failed: ' + (data.error || 'Unknown error') + ']()';
+                                var content = cm.getValue();
+                                content = content.replace(loadingText, errorText);
+                                cm.setValue(content);
+                            }
+                        })
+                        .catch(function(err) {
+                            // Replace loading text with error message
+                            var errorText = '![Image upload failed: Network error]()';
+                            var content = cm.getValue();
+                            content = content.replace(loadingText, errorText);
+                            cm.setValue(content);
+                        });
+                        
+                        return;
+                    }
+                }
+            });
+        }
+    }
+
+    if (noteEditBtn) {
+        noteEditBtn.addEventListener('click', function() {
+            // Hide edit button and display
+            noteDisplay.style.display = 'none';
+            noteEditBtn.style.display = 'none';
+            noteEditIconBtn.style.display = 'none';
+            if (noteEmpty) noteEmpty.style.display = 'none';
+            
+            // Show editor container
+            noteEditorContainer.style.display = 'block';
+            
+            // Initialize or reset editor
+            initializeNoteEditor();
+            if (noteMDE) {
+                noteMDE.value(noteOriginalContent);
+            }
+        });
+    }
+
+    if (noteEditIconBtn) {
+        noteEditIconBtn.addEventListener('click', function() {
+            // Hide display
+            noteDisplay.style.display = 'none';
+            noteEditBtn.style.display = 'none';
+            noteEditIconBtn.style.display = 'none';
+            
+            // Show editor container
+            noteEditorContainer.style.display = 'block';
+            
+            // Initialize or reset editor
+            initializeNoteEditor();
+            if (noteMDE) {
+                noteMDE.value(noteOriginalContent);
+            }
+        });
+    }
+
+    if (noteSaveBtn) {
+        noteSaveBtn.addEventListener('click', function() {
+            var content = noteMDE ? noteMDE.value() : noteEditor.value;
+            var formData = new FormData();
+            formData.append('quick_update', 'content');
+            formData.append('content', content);
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+            fetch('{% url "note_detail" note_id=note_id %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Update display with rendered markdown
+                    noteDisplay.innerHTML = data.content || '<span style="color: #828282;">No content</span>';
+                    noteOriginalContent = content;
+                    
+                    // Show content container if it was hidden
+                    noteContentContainer.style.display = 'block';
+                    if (noteEmpty) noteEmpty.style.display = 'none';
+                    
+                    // Switch back to view mode
+                    noteEditorContainer.style.display = 'none';
+                    noteDisplay.style.display = 'block';
+                    noteEditBtn.style.display = 'block';
+                    if (content) noteEditIconBtn.style.display = 'block';
+                } else {
+                    alert('Error saving note');
+                }
+            })
+            .catch(function(err) {
+                console.error('Error saving note:', err);
+                alert('Error saving note');
+            });
+        });
+    }
+
+    if (noteCancelBtn) {
+        noteCancelBtn.addEventListener('click', function() {
+            // Restore original content
+            if (noteMDE) {
+                noteMDE.value(noteOriginalContent);
+            } else {
+                noteEditor.value = noteOriginalContent;
+            }
+            
+            // Switch back to view mode
+            noteEditorContainer.style.display = 'none';
+            noteDisplay.style.display = 'block';
+            noteEditBtn.style.display = 'block';
+            if (noteOriginalContent) noteEditIconBtn.style.display = 'block';
+        });
+    }
+</script>
+
+<script>
+    // Dynamic project selection for Create from Note section
+    function handleProjectSelection(projectId, projectTitle) {
+        // Show loading state
+        var creationSection = document.querySelector('.note-creation-section');
+        var epicGroup = creationSection.querySelector('.creation-group:nth-child(2)');
+        var taskGroup = creationSection.querySelector('.creation-group:nth-child(3)');
+        
+        // Fetch epics and tasks for this project via AJAX
+        var formData = new FormData();
+        formData.append('quick_update', 'set_project');
+        formData.append('project_id', projectId);
+        formData.append('csrfmiddlewaretoken', document.querySelector('[name="csrfmiddlewaretoken"]').value);
+        
+        fetch('{% url "note_detail" note_id=note_id %}', {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                // Update UI to show selected project
+                updateProjectDisplay(projectId, projectTitle);
+                
+                // Show epic and task sections
+                if (epicGroup) epicGroup.style.display = 'block';
+                if (taskGroup) taskGroup.style.display = 'block';
+                
+                // Update epic dropdown in task creation form
+                updateEpicDropdown(data.epics);
+                
+                // Reattach event handlers to new forms
+                attachProjectSelectionHandlers();
+            }
+        })
+        .catch(function(err) {
+            console.error('Error selecting project:', err);
+        });
+    }
+    
+    function updateProjectDisplay(projectId, projectTitle) {
+        var creationGroup = document.querySelector('.creation-group');
+        
+        // Replace content with selected project display
+        var selectedHtml = '<strong class="creation-label">Project:</strong>' +
+            '<div class="selected-project">' +
+            '<a href="/pm/projects/' + projectId + '/">' + projectTitle + '</a>' +
+            '<div class="searchable-select entity-select entity-select-inline">' +
+            '<button type="button" class="link-button" id="project-change-btn">Change</button>' +
+            '</div></div>';
+        
+        creationGroup.innerHTML = selectedHtml;
+        
+        // Attach handler to Change button
+        var changeBtn = document.getElementById('project-change-btn');
+        if (changeBtn) {
+            changeBtn.addEventListener('click', function() {
+                // Show project selection dropdown
+                var projectSelectList = document.getElementById('project-select-list-dropdown');
+                if (!projectSelectList) {
+                    // Create and show the dropdown dynamically
+                    showProjectChangeDropdown();
+                } else {
+                    projectSelectList.style.display = projectSelectList.style.display === 'block' ? 'none' : 'block';
+                }
+            });
+        }
+    }
+    
+    function updateEpicDropdown(epics) {
+        // Update epic dropdown in task creation form
+        var epicSelect = document.querySelector('select[name="epic_id"]');
+        if (epicSelect) {
+            var selectedValue = epicSelect.value;
+            epicSelect.innerHTML = '<option value="">No Epic (Direct Task)</option>';
+            
+            epics.forEach(function(epic) {
+                var option = document.createElement('option');
+                option.value = epic.id;
+                option.textContent = (epic.seq_id ? epic.seq_id + ' ' : '') + epic.title;
+                epicSelect.appendChild(option);
+            });
+            
+            epicSelect.value = selectedValue;
+        }
+    }
+    
+    function attachProjectSelectionHandlers() {
+        // Attach AJAX handlers to project selection forms
+        document.querySelectorAll('#project-select-list form.entity-option:not(.entity-create)').forEach(function(form) {
+            form.removeEventListener('submit', handleProjectFormSubmit);
+            form.addEventListener('submit', handleProjectFormSubmit);
+        });
+    }
+    
+    function handleProjectFormSubmit(e) {
+        e.preventDefault();
+        var projectId = this.querySelector('input[name="project_id"]').value;
+        var projectTitle = this.querySelector('button').textContent.trim();
+        handleProjectSelection(projectId, projectTitle);
+    }
+    
+    // Attach initial handlers on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        attachProjectSelectionHandlers();
+    });
+    
+    // Also attach when dynamically selecting projects
+    attachProjectSelectionHandlers();
+</script>
 
 <script>
     // Searchable tag dropdowns (labels and people)

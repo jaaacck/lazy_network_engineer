@@ -4648,6 +4648,10 @@ def save_note(note_id, metadata, content):
     if not note_id or '/' in note_id or '..' in note_id:
         raise Http404("Invalid note ID")
     
+    # Ensure notes have a default "Active" status for database compatibility
+    if 'status' not in metadata:
+        metadata['status'] = 'active'
+
     # Extract updates text, people tags, labels for search
     updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
     people_tags = metadata.get('people', [])
@@ -4827,6 +4831,48 @@ def note_detail(request, note_id):
                     # Associate project with note
                     metadata['note_project_id'] = project_id
                     save_note(note_id, metadata, content)
+                    
+                    # Return JSON for AJAX requests
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        # Fetch epics and tasks for this project
+                        epics_data = []
+                        tasks_data = []
+                        
+                        epic_entities = Entity.objects.filter(type='epic', project_id=project_id)
+                        for epic_entity in epic_entities:
+                            epic_meta = _build_metadata_from_entity(epic_entity)
+                            epics_data.append({
+                                'id': epic_entity.id,
+                                'title': epic_entity.title or 'Untitled Epic',
+                                'seq_id': epic_entity.seq_id or ''
+                            })
+                        
+                        task_entities = Entity.objects.filter(type='task', project_id=project_id)
+                        for task_entity in task_entities:
+                            task_meta = _build_metadata_from_entity(task_entity)
+                            epic_title = 'No Epic'
+                            if task_entity.epic_id:
+                                try:
+                                    epic = Entity.objects.get(id=task_entity.epic_id, type='epic')
+                                    epic_title = epic.title or 'Untitled Epic'
+                                except Entity.DoesNotExist:
+                                    pass
+                            
+                            tasks_data.append({
+                                'id': task_entity.id,
+                                'title': task_entity.title or 'Untitled Task',
+                                'seq_id': task_entity.seq_id or '',
+                                'epic_id': task_entity.epic_id or None,
+                                'epic_title': epic_title
+                            })
+                        
+                        return JsonResponse({
+                            'success': True,
+                            'project_id': project_id,
+                            'project_title': p_meta.get('title', 'Untitled Project'),
+                            'epics': epics_data,
+                            'tasks': tasks_data
+                        })
             return redirect('note_detail', note_id=note_id)
         elif quick_update == 'create_project_from_note':
             # Create a new project and associate it with this note
@@ -4909,6 +4955,20 @@ def note_detail(request, note_id):
                     note_tasks.append(task_id)
                 metadata['note_tasks'] = note_tasks
                 save_note(note_id, metadata, content)
+            return redirect('note_detail', note_id=note_id)
+        elif quick_update == 'content':
+            # Handle inline content editing with AJAX
+            new_content = request.POST.get('content', '').strip()
+            content = new_content
+            save_note(note_id, metadata, content)
+            
+            # Return JSON response for AJAX request
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                rendered_content = render_markdown(content) if content else ''
+                return JsonResponse({
+                    'success': True,
+                    'content': rendered_content
+                })
             return redirect('note_detail', note_id=note_id)
     
     labels_list = normalize_labels(metadata.get('labels', []))
