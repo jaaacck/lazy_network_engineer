@@ -1910,7 +1910,7 @@ def _task_detail_impl(request, project, task, epic=None):
                 }
             })
 
-        return redirect('task_detail', project=project, epic=epic, task=task)
+        return get_task_redirect_url()
 
     # Handle update submission
     if request.method == 'POST' and 'update_content' in request.POST:
@@ -1940,7 +1940,7 @@ def _task_detail_impl(request, project, task, epic=None):
 
             save_task(project, task, metadata, content, epic_id=epic)
 
-        return redirect('task_detail', project=project, epic=epic, task=task)
+        return get_task_redirect_url()
 
     # Sort updates newest first - enrich with stored type/activity_type from Update table
     raw_updates = metadata.get('updates', [])
@@ -2226,7 +2226,7 @@ def _task_detail_impl(request, project, task, epic=None):
 
         save_task(project, task, metadata, content, epic_id=epic)
 
-        return redirect('task_detail', project=project, epic=epic, task=task)
+        return get_task_redirect_url()
 
     labels_list = normalize_labels(metadata.get('labels', []))
     labels_with_colors = [{'name': l, 'color': label_color(l)} for l in labels_list]
