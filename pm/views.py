@@ -4543,8 +4543,17 @@ def notes_list(request):
                 'preview': content[:200] if content else ''
             })
     
+    # Get all labels used by notes
+    from django.contrib.contenttypes.models import ContentType
+    note_ct = ContentType.objects.get_for_model(Note)
+    label_ids = EntityLabelLink.objects.filter(
+        content_type=note_ct
+    ).values_list('label_id', flat=True).distinct()
+    all_labels = Label.objects.filter(id__in=label_ids).order_by('name')
+    
     return render(request, 'pm/notes_list.html', {
-        'notes': notes
+        'notes': notes,
+        'all_labels': all_labels
     })
 
 

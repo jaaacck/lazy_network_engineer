@@ -11,35 +11,112 @@
     <a href="{% url 'new_note' %}" class="button">new note</a>
 </div>
 
-<div class="item-list">
-    {% for note in notes %}
-    <div class="item">
-        <div class="item-title">
-            <a href="{% url 'note_detail' note_id=note.id %}">{{ note.title }}</a>
-        </div>
-        {% if note.people or note.labels %}
-        <div class="label-chips">
-            {% for person in note.people %}
-            {% if person.id %}<a href="{% url 'person_detail' person_id=person.id %}" class="label-chip people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }}; text-decoration: none;">@{{ person.name }}</a>{% else %}<span class="label-chip people-chip" style="background: {{ person.color }}20; border-color: {{ person.color }}; color: {{ person.color }};">@{{ person.name }}</span>{% endif %}
-            {% endfor %}
-            {% for label in note.labels %}
-            <span class="label-chip" style="background: #f0f0f0; color: #333;">
-                {{ label }}
-            </span>
-            {% endfor %}
-        </div>
-        {% endif %}
-        {% if note.preview %}
-        <div class="item-meta note-preview">
-            {{ note.preview|truncatewords:30 }}
-        </div>
-        {% endif %}
-        <div class="item-meta">
-            Created: {{ note.created }} {% if note.updated != note.created %}| Updated: {{ note.updated }}{% endif %}
-        </div>
-    </div>
-    {% empty %}
-    <div class="empty">No notes yet. <a href="{% url 'new_note' %}">Create your first note</a></div>
+{% if all_labels %}
+<div class="filter-bar" style="margin-bottom: 10px; font-size: 13px;">
+    <strong>filter:</strong>
+    <a href="#" class="label-filter active" data-label="" style="text-decoration: none; margin: 0 6px;">all</a>
+    {% for label in all_labels %}
+    <a href="#" class="label-filter" data-label="{{ label.name }}" style="text-decoration: none; margin: 0 6px;">{{ label.name }}</a>
     {% endfor %}
 </div>
+{% endif %}
+
+<style>
+/* Override main container for full width */
+.main { max-width: 100% !important; padding: 0 20px !important; }
+
+/* Table styling */
+.notes-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.notes-table th { text-align: left; border-bottom: 1px solid #ddd; padding: 6px 8px; font-weight: 600; white-space: nowrap; }
+.notes-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+.notes-table tr { display: table-row; }
+.notes-table td:nth-child(1) { width: auto; }
+.notes-table td:nth-child(2) { width: 150px; }
+.notes-table td:nth-child(3) { width: 150px; }
+.notes-table td:nth-child(4) { width: 160px; }
+.notes-table td:nth-child(5) { width: 160px; }
+</style>
+
+<table class="notes-table">
+    <thead>
+        <tr>
+            <th style="width: auto;">title</th>
+            <th style="width: 150px;">people</th>
+            <th style="width: 150px;">labels</th>
+            <th style="width: 160px;">created</th>
+            <th style="width: 160px;">updated</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for note in notes %}
+    <tr class="note-item" data-labels="{{ note.labels|join:',' }}" style="border-bottom: 1px solid #f0f0f0;">
+        <td style="padding: 6px 8px;">
+            <a href="{% url 'note_detail' note_id=note.id %}" style="text-decoration: none;">{{ note.title }}</a>
+        </td>
+        <td style="padding: 6px 8px; font-size: 12px;">
+            {% for person in note.people %}
+            {% if person.id %}<a href="{% url 'person_detail' person_id=person.id %}" style="text-decoration: none; color: #007bff; margin-right: 6px;">@{{ person.name }}</a>{% else %}<span style="color: #666; margin-right: 6px;">@{{ person.name }}</span>{% endif %}
+            {% endfor %}
+        </td>
+        <td style="padding: 6px 8px; font-size: 12px;">
+            {% for label in note.labels %}
+            <span style="color: #666; margin-right: 6px;">#{{ label }}</span>
+            {% endfor %}
+        </td>
+        <td style="padding: 6px 8px; color: #666; font-size: 12px;">{{ note.created }}</td>
+        <td style="padding: 6px 8px; color: #666; font-size: 12px;">{{ note.updated }}</td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="5" style="padding: 20px 8px; text-align: center; color: #666;" class="empty">No notes yet. <a href="{% url 'new_note' %}">Create your first note</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const filterLinks = document.querySelectorAll('.label-filter');
+    const noteItems = document.querySelectorAll('.note-item');
+    
+    filterLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            // Update active state
+            filterLinks.forEach(l => {
+                l.classList.remove('active');
+                l.style.fontWeight = 'normal';
+            });
+            this.classList.add('active');
+            this.style.fontWeight = 'bold';
+            
+            // Get selected label
+            const selectedLabel = this.dataset.label;
+            
+            // Filter notes
+            let visibleCount = 0;
+            noteItems.forEach(note => {
+                const noteLabels = note.dataset.labels ? note.dataset.labels.split(',') : [];
+                
+                if (selectedLabel === '' || noteLabels.includes(selectedLabel)) {
+                    note.style.display = '';
+                    visibleCount++;
+                } else {
+                    note.style.display = 'none';
+                }
+            });
+            
+            // Show/hide empty message
+            const emptyDiv = document.querySelector('.empty');
+            if (emptyDiv) {
+                const emptyRow = emptyDiv.closest('tr');
+                if (emptyRow) {
+                    emptyRow.style.display = visibleCount === 0 ? '' : 'none';
+                }
+            }
+        });
+    });
+});
+</script>
 {% endblock %}
