@@ -1,5 +1,7 @@
 from django.db import models
 from django.db import connection
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 import json
 import os
 from django.conf import settings
@@ -65,94 +67,11 @@ class Label(models.Model):
         return self.name
 
 
-class Entity(models.Model):
-    """Index of all entities (projects, epics, tasks, subtasks, notes)."""
-    id = models.CharField(max_length=50, primary_key=True)
-    type = models.CharField(max_length=20)  # 'project', 'epic', 'task', 'subtask', 'note'
-    title = models.CharField(max_length=500)
-    # Status: now exclusively using ForeignKey to Status model
-    status_fk = models.ForeignKey(Status, on_delete=models.PROTECT, related_name='entities', null=False)
-    priority = models.IntegerField(null=True, blank=True)
-    created = models.CharField(max_length=50, blank=True)
-    updated = models.CharField(max_length=50, blank=True)
-    
-    # Relationships
-    project_id = models.CharField(max_length=50, null=True, blank=True)
-    epic_id = models.CharField(max_length=50, null=True, blank=True)
-    task_id = models.CharField(max_length=50, null=True, blank=True)
-    
-    # Scheduling: keep old string fields for migration, add new date fields
-    due_date = models.CharField(max_length=50, blank=True)  # Old field, kept for migration
-    schedule_start = models.CharField(max_length=50, blank=True)  # Old field, kept for migration
-    schedule_end = models.CharField(max_length=50, blank=True)  # Old field, kept for migration
-    due_date_dt = models.DateField(null=True, blank=True)  # New proper date field
-    schedule_start_dt = models.DateTimeField(null=True, blank=True)  # New proper datetime field
-    schedule_end_dt = models.DateTimeField(null=True, blank=True)  # New proper datetime field
-    
-    # Content and metadata
-    content = models.TextField(blank=True)  # Markdown content
-    metadata_json = models.TextField()  # Full metadata as JSON (kept for backward compatibility)
-    
-    # Extracted metadata fields
-    seq_id = models.CharField(max_length=50, blank=True, null=True)  # Sequence ID for ordering
-    archived = models.BooleanField(default=False)  # Archive flag
-    is_inbox_epic = models.BooleanField(default=False)  # Epic-specific inbox flag
-    color = models.CharField(max_length=7, blank=True, null=True)  # Project color (hex)
-    notes = models.JSONField(default=list, blank=True)  # Array of note IDs
-    dependencies = models.JSONField(default=list, blank=True)  # Array of dependency entity IDs
-    checklist = models.JSONField(default=list, blank=True)  # Array of checklist items with id/title/status
-    stats = models.JSONField(default=dict, blank=True)  # Complex nested statistics object
-    stats_version = models.IntegerField(null=True, blank=True)  # Stats version
-    stats_updated = models.DateTimeField(null=True, blank=True)  # Stats update timestamp
-    
-    class Meta:
-        db_table = 'entities'
-        indexes = [
-            models.Index(fields=['type']),
-            models.Index(fields=['status_fk']),
-            models.Index(fields=['due_date']),
-            models.Index(fields=['due_date_dt']),
-            models.Index(fields=['project_id']),
-            models.Index(fields=['updated']),
-            models.Index(fields=['archived']),
-            models.Index(fields=['seq_id']),
-        ]
-
-
-class EntityPerson(models.Model):
-    """Many-to-many relationship between Entity and Person."""
-    entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name='assigned_people')
-    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='assigned_entities')
-    created = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        db_table = 'entity_persons'
-        unique_together = [['entity', 'person']]
-        indexes = [
-            models.Index(fields=['entity']),
-            models.Index(fields=['person']),
-        ]
-    
-    def __str__(self):
-        return f"{self.entity.title} - {self.person.name}"
-
-
-class EntityLabel(models.Model):
-    """Many-to-many relationship between Entity and Label."""
-    entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name='labels')
-    label = models.ForeignKey(Label, on_delete=models.CASCADE, related_name='entities')
-    created = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        db_table = 'entity_labels'
-        unique_together = [['entity', 'label']]
-        indexes = [
-            models.Index(fields=['entity']),
-            models.Index(fields=['label']),
-        ]
-    
-    def __str__(self):
-        return f"{self.entity.title} - {self.label.name}"
+# =============================================================================
+# OLD MODELS - DEPRECATED (Removed after migration to specialized models)
+# Entity, EntityPerson, EntityLabel have been replaced by:
+# Project, Epic, Task, Subtask, Note, EntityPersonLink, EntityLabelLink
+# =============================================================================
 
 
 class Update(models.Model):
@@ -171,6 +90,177 @@ class Update(models.Model):
             models.Index(fields=['timestamp']),
             models.Index(fields=['entity_id', 'activity_type']),  # For filtered queries
         ]
+
+
+# =============================================================================
+# NEW: Refactored Entity Models with Type-Specific Classes
+# =============================================================================
+
+class BaseEntity(models.Model):
+    """Abstract base class for all entity types with common fields."""
+    id = models.CharField(max_length=50, primary_key=True)
+    title = models.CharField(max_length=500)
+    status_fk = models.ForeignKey(Status, on_delete=models.PROTECT, related_name='%(class)s_entities')
+    priority = models.IntegerField(null=True, blank=True)
+    created = models.CharField(max_length=50, blank=True)
+    updated = models.CharField(max_length=50, blank=True)
+    
+    # Scheduling fields
+    due_date_dt = models.DateField(null=True, blank=True)
+    schedule_start_dt = models.DateTimeField(null=True, blank=True)
+    schedule_end_dt = models.DateTimeField(null=True, blank=True)
+    
+    # Content
+    content = models.TextField(blank=True)
+    
+    # Extracted metadata fields
+    seq_id = models.CharField(max_length=50, blank=True, null=True)
+    archived = models.BooleanField(default=False)
+    
+    class Meta:
+        abstract = True
+    
+    def __str__(self):
+        return self.title
+
+
+class Project(BaseEntity):
+    """Project entity - top-level organizational unit."""
+    # Project-specific fields
+    color = models.CharField(max_length=7, blank=True, null=True)  # Hex color
+    stats = models.JSONField(default=dict, blank=True)  # Aggregated statistics
+    stats_version = models.IntegerField(null=True, blank=True)
+    stats_updated = models.DateTimeField(null=True, blank=True)
+    notes = models.JSONField(default=list, blank=True)  # Array of note IDs
+    
+    class Meta:
+        db_table = 'pm_project'
+        indexes = [
+            models.Index(fields=['status_fk']),
+            models.Index(fields=['archived']),
+            models.Index(fields=['seq_id']),
+        ]
+
+
+class Epic(BaseEntity):
+    """Epic entity - belongs to a project, contains tasks."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='epics')
+    is_inbox_epic = models.BooleanField(default=False)
+    notes = models.JSONField(default=list, blank=True)  # Array of note IDs
+    
+    class Meta:
+        db_table = 'pm_epic'
+        indexes = [
+            models.Index(fields=['project']),
+            models.Index(fields=['status_fk']),
+            models.Index(fields=['archived']),
+            models.Index(fields=['is_inbox_epic']),
+        ]
+
+
+class Task(BaseEntity):
+    """Task entity - belongs to a project, optionally to an epic."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
+    epic = models.ForeignKey(Epic, on_delete=models.CASCADE, related_name='tasks', null=True, blank=True)
+    
+    # Task-specific fields
+    dependencies = models.JSONField(default=list, blank=True)  # Array of task IDs
+    checklist = models.JSONField(default=list, blank=True)  # Checklist items
+    notes = models.JSONField(default=list, blank=True)  # Array of note IDs
+    
+    class Meta:
+        db_table = 'pm_task'
+        indexes = [
+            models.Index(fields=['project']),
+            models.Index(fields=['epic']),
+            models.Index(fields=['status_fk']),
+            models.Index(fields=['due_date_dt']),
+            models.Index(fields=['archived']),
+        ]
+
+
+class Subtask(BaseEntity):
+    """Subtask entity - belongs to a task (and inherits project/epic from task)."""
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='subtasks')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='subtasks')
+    epic = models.ForeignKey(Epic, on_delete=models.CASCADE, related_name='subtasks', null=True, blank=True)
+    
+    # Subtask-specific fields
+    checklist = models.JSONField(default=list, blank=True)  # Checklist items
+    notes = models.JSONField(default=list, blank=True)  # Array of note IDs
+    
+    class Meta:
+        db_table = 'pm_subtask'
+        indexes = [
+            models.Index(fields=['task']),
+            models.Index(fields=['project']),
+            models.Index(fields=['epic']),
+            models.Index(fields=['status_fk']),
+            models.Index(fields=['due_date_dt']),
+            models.Index(fields=['archived']),
+        ]
+
+
+class Note(BaseEntity):
+    """Note entity - standalone notes."""
+    notes = models.JSONField(default=list, blank=True)  # Array of linked note IDs
+    
+    class Meta:
+        db_table = 'pm_note'
+        indexes = [
+            models.Index(fields=['status_fk']),
+            models.Index(fields=['archived']),
+        ]
+
+
+# =============================================================================
+# Many-to-Many Relationships using GenericForeignKey
+# =============================================================================
+
+class EntityPersonLink(models.Model):
+    """Generic many-to-many relationship between any entity type and Person."""
+    # GenericForeignKey to any entity type
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=50)
+    entity = GenericForeignKey('content_type', 'object_id')
+    
+    # Person relationship
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='entity_links')
+    created = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'pm_entity_person_link'
+        unique_together = [['content_type', 'object_id', 'person']]
+        indexes = [
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['person']),
+        ]
+    
+    def __str__(self):
+        return f"{self.entity} - {self.person.name}"
+
+
+class EntityLabelLink(models.Model):
+    """Generic many-to-many relationship between any entity type and Label."""
+    # GenericForeignKey to any entity type
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=50)
+    entity = GenericForeignKey('content_type', 'object_id')
+    
+    # Label relationship
+    label = models.ForeignKey(Label, on_delete=models.CASCADE, related_name='entity_links')
+    created = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'pm_entity_label_link'
+        unique_together = [['content_type', 'object_id', 'label']]
+        indexes = [
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['label']),
+        ]
+    
+    def __str__(self):
+        return f"{self.entity} - {self.label.name}"
 
 
 def init_search_index():
@@ -197,31 +287,9 @@ def init_search_index():
         """)
 
 
-def init_relationships_table():
-    """Initialize relationships table if it does not exist."""
-    with connection.cursor() as cursor:
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='relationships'
-        """)
-        if cursor.fetchone():
-            return
-        
-        cursor.execute("""
-            CREATE TABLE relationships (
-                parent_id TEXT,
-                child_id TEXT,
-                type TEXT,
-                PRIMARY KEY (parent_id, child_id),
-                FOREIGN KEY (parent_id) REFERENCES entities(id),
-                FOREIGN KEY (child_id) REFERENCES entities(id)
-            )
-        """)
-        cursor.execute("CREATE INDEX idx_relationships_parent ON relationships(parent_id)")
-        cursor.execute("CREATE INDEX idx_relationships_child ON relationships(child_id)")
-
-
 def ensure_index_tables():
     """Ensure all index tables exist."""
     init_search_index()
-    init_relationships_table()
+    # Note: relationships table was deprecated and dropped in migration 0015
+    # Relationships are now handled by Django ForeignKeys in specialized models
+

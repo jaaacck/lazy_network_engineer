@@ -9,7 +9,12 @@ from django.db import connection, transaction
 from django.db.models import Q
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone as tz
-from pm.models import Entity, Update, Status, Person, EntityPerson, Label, EntityLabel, ensure_index_tables
+from django.contrib.contenttypes.models import ContentType
+from pm.models import (
+    Update, Status, Person, Label,
+    Project, Epic, Task, Subtask, Note, EntityPersonLink, EntityLabelLink,
+    ensure_index_tables
+)
 
 logger = logging.getLogger('pm')
 
@@ -120,35 +125,165 @@ class IndexStorage:
                     except (ValueError, TypeError):
                         pass
                 
-                # Set relationships based on type
-                if entity_type == 'epic':
-                    entity_data['project_id'] = metadata.get('project_id', '')
+                # Map entity type to model class
+                model_map = {
+                    'project': Project,
+                    'epic': Epic,
+                    'task': Task,
+                    'subtask': Subtask,
+                    'note': Note,
+                }
+                
+                model_class = model_map.get(entity_type)
+                if not model_class:
+                    raise Exception(f"Unknown entity type: {entity_type}")
+                
+                # Build entity data based on model class
+                # Common fields for all models
+                base_entity_data = {
+                    'id': entity_id,
+                    'title': metadata.get('title', 'Untitled'),
+                    'priority': metadata.get('priority'),
+                    'created': metadata.get('created', ''),
+                    'updated': metadata.get('updated', ''),
+                    'content': content or '',
+                    'seq_id': metadata.get('seq_id', '') or None,
+                    'archived': metadata.get('archived', False),
+                    'status_fk': None,  # Will be set below
+                    'due_date_dt': None,
+                    'schedule_start_dt': None,
+                    'schedule_end_dt': None,
+                }
+                
+                # Set Status ForeignKey - REQUIRED
+                status_name = metadata.get('status', '')
+                if not status_name:
+                    logger.error(f"No status provided for entity {entity_id}")
+                    raise Exception(f"Status is required for entity {entity_id}")
+                
+                try:
+                    status_obj = Status.objects.filter(
+                        name=status_name,
+                        is_active=True
+                    ).filter(
+                        Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
+                    ).first()
+                    
+                    if not status_obj:
+                        logger.error(f"Could not find active status '{status_name}' for entity type '{entity_type}'")
+                        raise Exception(f"Status '{status_name}' not found for entity type '{entity_type}'")
+                    
+                    base_entity_data['status_fk'] = status_obj
+                except Exception as e:
+                    logger.error(f"Status lookup failed for entity {entity_id}: {e}")
+                    raise
+                
+                # Parse and set date fields
+                if metadata.get('due_date'):
+                    try:
+                        parsed_date = parse_date(metadata['due_date'])
+                        if not parsed_date:
+                            parsed_datetime = parse_datetime(metadata['due_date'])
+                            if parsed_datetime:
+                                parsed_date = parsed_datetime.date()
+                        if parsed_date:
+                            base_entity_data['due_date_dt'] = parsed_date
+                    except (ValueError, TypeError):
+                        pass
+                
+                if metadata.get('schedule_start'):
+                    try:
+                        parsed_datetime = parse_datetime(metadata['schedule_start'])
+                        if parsed_datetime:
+                            base_entity_data['schedule_start_dt'] = parsed_datetime
+                    except (ValueError, TypeError):
+                        pass
+                
+                if metadata.get('schedule_end'):
+                    try:
+                        parsed_datetime = parse_datetime(metadata['schedule_end'])
+                        if parsed_datetime:
+                            base_entity_data['schedule_end_dt'] = parsed_datetime
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Add type-specific fields and relationships
+                if entity_type == 'project':
+                    base_entity_data.update({
+                        'color': metadata.get('color', '') or None,
+                        'stats': metadata.get('stats', {}),
+                        'stats_version': metadata.get('stats_version'),
+                        'stats_updated': None,
+                        'notes': metadata.get('notes', []),
+                    })
+                    if metadata.get('stats_updated'):
+                        try:
+                            parsed = parse_datetime(metadata['stats_updated'])
+                            if parsed and settings.USE_TZ and tz.is_naive(parsed):
+                                parsed = tz.make_aware(parsed, tz.get_current_timezone())
+                            if parsed:
+                                base_entity_data['stats_updated'] = parsed
+                        except (ValueError, TypeError):
+                            pass
+                    
+                elif entity_type == 'epic':
+                    project_id = metadata.get('project_id', '')
+                    if not project_id:
+                        raise Exception(f"Epic {entity_id} requires project_id")
+                    base_entity_data.update({
+                        'project_id': project_id,
+                        'is_inbox_epic': metadata.get('is_inbox_epic', False),
+                        'notes': metadata.get('notes', []),
+                    })
+                    
                 elif entity_type == 'task':
-                    entity_data['project_id'] = metadata.get('project_id', '')
-                    entity_data['epic_id'] = metadata.get('epic_id', '')
+                    project_id = metadata.get('project_id', '')
+                    if not project_id:
+                        raise Exception(f"Task {entity_id} requires project_id")
+                    base_entity_data.update({
+                        'project_id': project_id,
+                        'epic_id': metadata.get('epic_id') or None,
+                        'dependencies': metadata.get('dependencies', []),
+                        'checklist': metadata.get('checklist', []),
+                        'notes': metadata.get('notes', []),
+                    })
+                    
                 elif entity_type == 'subtask':
-                    entity_data['project_id'] = metadata.get('project_id', '')
-                    entity_data['epic_id'] = metadata.get('epic_id', '')
-                    entity_data['task_id'] = metadata.get('task_id', '')
+                    project_id = metadata.get('project_id', '')
+                    task_id = metadata.get('task_id', '')
+                    if not (project_id and task_id):
+                        raise Exception(f"Subtask {entity_id} requires project_id and task_id")
+                    base_entity_data.update({
+                        'project_id': project_id,
+                        'task_id': task_id,
+                        'epic_id': metadata.get('epic_id') or None,
+                        'checklist': metadata.get('checklist', []),
+                        'notes': metadata.get('notes', []),
+                    })
+                    
+                elif entity_type == 'note':
+                    base_entity_data.update({
+                        'notes': metadata.get('notes', []),
+                    })
                 
                 # Update or create entity
-                entity, created = Entity.objects.update_or_create(
+                entity, created = model_class.objects.update_or_create(
                     id=entity_id,
-                    defaults=entity_data
+                    defaults=base_entity_data
                 )
                 
-                # Update EntityPerson relationships
+                # Update EntityPersonLink relationships (using GenericForeignKey)
                 self._sync_entity_persons(entity, people_tags or [])
                 
-                # Update EntityLabel relationships
+                # Update EntityLabelLink relationships (using GenericForeignKey)
                 self._sync_entity_labels(entity, labels or [])
                 
                 # Update search index
                 self._update_search_index(entity_id, metadata.get('title', ''), content or '', 
                                         updates_text, people_tags or [], labels or [])
                 
-                # Update relationships
-                self._update_relationships(entity_id, entity_type, metadata)
+                # Note: Relationships are now handled by Django ForeignKeys in the specialized models
+                # The old relationships table was dropped in migration 0015
                 
                 # Update updates table
                 self._sync_updates(entity_id, metadata.get('updates', []))
@@ -172,33 +307,14 @@ class IndexStorage:
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, [entity_id, title, content[:10000], updates_text[:10000], people_str, labels_str])
     
-    def _update_relationships(self, entity_id, entity_type, metadata):
-        """Update relationships table."""
-        with connection.cursor() as cursor:
-            # Delete existing relationships for this entity
-            cursor.execute("DELETE FROM relationships WHERE child_id = %s", [entity_id])
-            
-            # Add parent relationships
-            if entity_type == 'epic' and metadata.get('project_id'):
-                cursor.execute("""
-                    INSERT OR REPLACE INTO relationships (parent_id, child_id, type)
-                    VALUES (%s, %s, %s)
-                """, [metadata['project_id'], entity_id, 'epic'])
-            elif entity_type == 'task' and metadata.get('epic_id'):
-                cursor.execute("""
-                    INSERT OR REPLACE INTO relationships (parent_id, child_id, type)
-                    VALUES (%s, %s, %s)
-                """, [metadata['epic_id'], entity_id, 'task'])
-            elif entity_type == 'subtask' and metadata.get('task_id'):
-                cursor.execute("""
-                    INSERT OR REPLACE INTO relationships (parent_id, child_id, type)
-                    VALUES (%s, %s, %s)
-                """, [metadata['task_id'], entity_id, 'subtask'])
     
     def _sync_entity_persons(self, entity, people_tags):
-        """Sync EntityPerson relationships."""
+        """Sync EntityPersonLink relationships using GenericForeignKey."""
         # Normalize people tags (remove @ prefix, lowercase for lookup)
         normalized_tags = [tag.strip().lstrip('@').lower() for tag in people_tags if tag.strip()]
+        
+        # Get content type for this entity
+        content_type = ContentType.objects.get_for_model(entity)
         
         # Get current Person IDs that should be assigned
         person_ids_to_keep = set()
@@ -208,21 +324,28 @@ class IndexStorage:
                 person_ids_to_keep.add(person.id)
         
         # Get current relationships
-        current_relationships = EntityPerson.objects.filter(entity=entity)
+        current_relationships = EntityPersonLink.objects.filter(
+            content_type=content_type,
+            object_id=entity.id
+        )
         current_person_ids = {ep.person_id for ep in current_relationships}
         
         # Add new relationships
         for person_id in person_ids_to_keep - current_person_ids:
-            EntityPerson.objects.get_or_create(
-                entity=entity,
+            EntityPersonLink.objects.get_or_create(
+                content_type=content_type,
+                object_id=entity.id,
                 person_id=person_id
             )
         
         # Remove relationships that are no longer in the list
-        EntityPerson.objects.filter(entity=entity).exclude(person_id__in=person_ids_to_keep).delete()
+        EntityPersonLink.objects.filter(
+            content_type=content_type,
+            object_id=entity.id
+        ).exclude(person_id__in=person_ids_to_keep).delete()
     
     def _sync_entity_labels(self, entity, labels_list):
-        """Sync EntityLabel relationships."""
+        """Sync EntityLabelLink relationships using GenericForeignKey."""
         # Normalize labels (handle both string and list formats)
         if isinstance(labels_list, str):
             normalized_labels = [l.strip().lower() for l in labels_list.split(',') if l.strip()]
@@ -230,6 +353,9 @@ class IndexStorage:
             normalized_labels = [str(l).strip().lower() for l in labels_list if str(l).strip()]
         else:
             normalized_labels = []
+        
+        # Get content type for this entity
+        content_type = ContentType.objects.get_for_model(entity)
         
         # Get current Label IDs that should be assigned
         label_ids_to_keep = set()
@@ -243,18 +369,25 @@ class IndexStorage:
             label_ids_to_keep.add(label.id)
         
         # Get current relationships
-        current_relationships = EntityLabel.objects.filter(entity=entity)
+        current_relationships = EntityLabelLink.objects.filter(
+            content_type=content_type,
+            object_id=entity.id
+        )
         current_label_ids = {el.label_id for el in current_relationships}
         
         # Add new relationships
         for label_id in label_ids_to_keep - current_label_ids:
-            EntityLabel.objects.get_or_create(
-                entity=entity,
+            EntityLabelLink.objects.get_or_create(
+                content_type=content_type,
+                object_id=entity.id,
                 label_id=label_id
             )
         
         # Remove relationships that are no longer in the list
-        EntityLabel.objects.filter(entity=entity).exclude(label_id__in=label_ids_to_keep).delete()
+        EntityLabelLink.objects.filter(
+            content_type=content_type,
+            object_id=entity.id
+        ).exclude(label_id__in=label_ids_to_keep).delete()
     
     def _sync_updates(self, entity_id, updates_list):
         """Sync updates to updates table."""
@@ -380,24 +513,21 @@ class IndexStorage:
         return qs
     
     def delete_entity(self, entity_id):
-        """Delete entity from index."""
+        """Delete entity from index and related data.
+        
+        Note: This method is deprecated. Entity deletion should be done via Django ORM
+        on the specialized models (Project, Epic, Task, Subtask, Note), which will
+        CASCADE delete related EntityPersonLink and EntityLabelLink records.
+        """
         try:
             with transaction.atomic():
-                # Delete EntityPerson relationships (CASCADE should handle this, but explicit is better)
-                EntityPerson.objects.filter(entity_id=entity_id).delete()
-                
-                # Delete EntityLabel relationships (CASCADE should handle this, but explicit is better)
-                EntityLabel.objects.filter(entity_id=entity_id).delete()
-                
-                # Delete from search index
+                # Delete from search index and updates
                 with connection.cursor() as cursor:
                     cursor.execute("DELETE FROM search_index WHERE entity_id = %s", [entity_id])
-                    cursor.execute("DELETE FROM relationships WHERE parent_id = %s OR child_id = %s", 
-                                 [entity_id, entity_id])
                     cursor.execute("DELETE FROM updates WHERE entity_id = %s", [entity_id])
                 
-                # Delete entity
-                Entity.objects.filter(id=entity_id).delete()
+                # Note: Entity model deletion should be handled via the specialized models
+                # EntityPersonLink and EntityLabelLink will CASCADE delete automatically
         except Exception as e:
             logger.error(f"Error deleting entity {entity_id} from index: {e}")
             raise

@@ -1,7 +1,10 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Entity, Update, Status, Person, EntityPerson
-import json
+from .models import (
+    Update, Status, Person, Label,
+    Project, Epic, Task, Subtask, Note,
+    EntityPersonLink, EntityLabelLink
+)
 
 # Customize admin site
 admin.site.site_header = "Lazy Network Engineer Admin"
@@ -9,51 +12,48 @@ admin.site.site_title = "LNE Admin"
 admin.site.index_title = "Backend Management"
 
 
-@admin.register(Entity)
-class EntityAdmin(admin.ModelAdmin):
-    list_display = ('id', 'type', 'title', 'status_fk', 'priority', 'created', 'updated')
-    list_filter = ('type', 'status_fk', 'priority')
+@admin.register(Project)
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'status_fk', 'priority', 'color', 'created', 'updated')
+    list_filter = ('status_fk', 'priority', 'archived')
     search_fields = ('id', 'title', 'content')
-    readonly_fields = ('id', 'created', 'updated', 'formatted_metadata')
-    fieldsets = (
-        ('Basic Information', {
-            'fields': ('id', 'type', 'title', 'status_fk', 'priority')
-        }),
-        ('Relationships', {
-            'fields': ('project_id', 'epic_id', 'task_id'),
-            'classes': ('collapse',)
-        }),
-        ('Scheduling', {
-            'fields': ('due_date', 'due_date_dt', 'schedule_start', 'schedule_start_dt', 'schedule_end', 'schedule_end_dt'),
-            'classes': ('collapse',)
-        }),
-        ('Content', {
-            'fields': ('content',)
-        }),
-        ('Metadata', {
-            'fields': ('formatted_metadata', 'metadata_json'),
-            'classes': ('collapse',)
-        }),
-    )
-    
-    def formatted_metadata(self, obj):
-        """Display formatted JSON metadata"""
-        if obj.metadata_json:
-            try:
-                metadata = json.loads(obj.metadata_json)
-                formatted_json = json.dumps(metadata, indent=2)
-                return format_html(
-                    '<pre style="max-height: 300px; overflow: auto; background: #f5f5f5; padding: 10px; border: 1px solid #ddd; border-radius: 2px;">{}</pre>',
-                    formatted_json
-                )
-            except:
-                return 'Invalid JSON'
-        return 'No metadata'
-    formatted_metadata.short_description = 'Metadata (Formatted)'
-    
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        return qs.select_related('status_fk').order_by('-updated', '-created')
+    readonly_fields = ('id', 'created', 'updated')
+
+
+@admin.register(Epic)
+class EpicAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'project', 'status_fk', 'priority', 'is_inbox_epic', 'created', 'updated')
+    list_filter = ('status_fk', 'priority', 'is_inbox_epic', 'archived')
+    search_fields = ('id', 'title', 'content')
+    readonly_fields = ('id', 'created', 'updated')
+    raw_id_fields = ('project',)
+
+
+@admin.register(Task)
+class TaskAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'project', 'epic', 'status_fk', 'priority', 'created', 'updated')
+    list_filter = ('status_fk', 'priority', 'archived')
+    search_fields = ('id', 'title', 'content')
+    readonly_fields = ('id', 'created', 'updated')
+    raw_id_fields = ('project', 'epic')
+
+
+@admin.register(Subtask)
+class SubtaskAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'task', 'project', 'epic', 'status_fk', 'priority', 'created', 'updated')
+    list_filter = ('status_fk', 'priority', 'archived')
+    search_fields = ('id', 'title', 'content')
+    readonly_fields = ('id', 'created', 'updated')
+    raw_id_fields = ('task', 'project', 'epic')
+
+
+@admin.register(Note)
+class NoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'status_fk', 'priority', 'created', 'updated')
+    list_filter = ('status_fk', 'priority', 'archived')
+    search_fields = ('id', 'title', 'content')
+    readonly_fields = ('id', 'created', 'updated')
+
 
 
 @admin.register(Status)
@@ -68,38 +68,29 @@ class StatusAdmin(admin.ModelAdmin):
 class PersonAdmin(admin.ModelAdmin):
     list_display = ('name', 'display_name', 'email', 'created', 'updated')
     search_fields = ('name', 'display_name', 'email')
-    readonly_fields = ('id', 'created', 'updated', 'formatted_metadata')
-    fieldsets = (
-        ('Basic Information', {
-            'fields': ('id', 'name', 'display_name', 'email')
-        }),
-        ('Metadata', {
-            'fields': ('formatted_metadata', 'metadata_json'),
-            'classes': ('collapse',)
-        }),
-    )
-    
-    def formatted_metadata(self, obj):
-        """Display formatted JSON metadata"""
-        if obj.metadata_json:
-            try:
-                metadata = json.loads(obj.metadata_json)
-                formatted_json = json.dumps(metadata, indent=2)
-                return format_html(
-                    '<pre style="max-height: 300px; overflow: auto; background: #f5f5f5; padding: 10px; border: 1px solid #ddd; border-radius: 2px;">{}</pre>',
-                    formatted_json
-                )
-            except:
-                return 'Invalid JSON'
-        return 'No metadata'
-    formatted_metadata.short_description = 'Metadata (Formatted)'
+    readonly_fields = ('id', 'created', 'updated')
 
 
-@admin.register(EntityPerson)
-class EntityPersonAdmin(admin.ModelAdmin):
-    list_display = ('entity', 'person', 'created')
-    list_filter = ('created',)
-    search_fields = ('entity__title', 'person__name')
+@admin.register(Label)
+class LabelAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created')
+    search_fields = ('name',)
+    readonly_fields = ('id', 'created')
+
+
+@admin.register(EntityPersonLink)
+class EntityPersonLinkAdmin(admin.ModelAdmin):
+    list_display = ('person', 'content_type', 'object_id', 'created')
+    list_filter = ('content_type', 'created')
+    search_fields = ('person__name',)
+    readonly_fields = ('created',)
+
+
+@admin.register(EntityLabelLink)
+class EntityLabelLinkAdmin(admin.ModelAdmin):
+    list_display = ('label', 'content_type', 'object_id', 'created')
+    list_filter = ('content_type', 'created')
+    search_fields = ('label__name',)
     readonly_fields = ('created',)
 
 

@@ -23,7 +23,11 @@ from .utils import (
     validate_id, safe_join_path, 
     calculate_markdown_progress, calculate_checklist_progress
 )
-from .models import Entity, Status, Person, EntityPerson, Label, EntityLabel, Update
+from .models import (
+    Status, Person, Label, Update,
+    Project, Epic, Task, Subtask, Note, EntityPersonLink, EntityLabelLink
+)
+from django.contrib.contenttypes.models import ContentType
 from .storage.index_storage import IndexStorage
 
 # Initialize index storage
@@ -31,6 +35,28 @@ index_storage = IndexStorage()
 
 logger = logging.getLogger('pm')
 STATS_VERSION = 1
+
+# Entity type to model mapping
+ENTITY_TYPE_MAP = {
+    'project': Project,
+    'epic': Epic,
+    'task': Task,
+    'subtask': Subtask,
+    'note': Note,
+}
+
+def get_entity_model(entity_type):
+    """Get the model class for a given entity type."""
+    return ENTITY_TYPE_MAP.get(entity_type)
+
+def get_entity_by_id(entity_id):
+    """Get an entity by ID, trying all model types."""
+    for model_class in ENTITY_TYPE_MAP.values():
+        try:
+            return model_class.objects.get(id=entity_id)
+        except model_class.DoesNotExist:
+            continue
+    raise Http404(f"Entity with id {entity_id} not found")
 
 # Allowed HTML tags and attributes for bleach sanitization (matching markdown_extras.py)
 ALLOWED_TAGS = [
@@ -264,15 +290,10 @@ def get_all_labels_in_system():
     if cached is not None:
         return cached
     
-    # Query Label table directly - get labels that are used by entities of relevant types
-    entities_with_labels = Entity.objects.filter(
-        type__in=['epic', 'task', 'subtask', 'note']
-    ).prefetch_related('labels')
-    
+    # Query all labels that are linked to any entity via EntityLabelLink
     labels = set()
-    for entity in entities_with_labels:
-        for entity_label in entity.labels.all():
-            labels.add(entity_label.label.name)
+    for label_link in EntityLabelLink.objects.select_related('label').all():
+        labels.add(label_link.label.name)
     
     result = sorted(labels, key=str.lower)
     cache.set(cache_key, result, 300)  # Cache for 5 minutes instead of 60 seconds
@@ -351,7 +372,7 @@ def save_person(person_id, metadata, content=''):
     # Ensure person_id is in metadata
     metadata['id'] = person_id
     
-    # Ensure notes have a default "Active" status for database compatibility
+    # Ensure person has a default "Active" status for database compatibility
     if 'status' not in metadata:
         metadata['status'] = 'active'
 
@@ -371,22 +392,8 @@ def save_person(person_id, metadata, content=''):
         }
     )
     
-    # Also save to Entity table for backward compatibility and search index
-    # Extract updates text, people tags, labels for search
-    updates_text = ' '.join([u.get('content', '') for u in metadata.get('updates', [])])
-    people_tags = metadata.get('people', [])
-    labels = metadata.get('labels', [])
-    
-    # Save to database and sync search index
-    index_storage.sync_entity(
-        entity_id=person_id,
-        entity_type='person',
-        metadata=metadata,
-        content=content or '',
-        updates_text=updates_text,
-        people_tags=people_tags,
-        labels=labels
-    )
+    # Note: Person is not an entity type, so we don't sync to entity index
+    # Person records are standalone and referenced via EntityPersonLink
 
 
 def ensure_person_exists(person_name):
@@ -476,16 +483,13 @@ def get_all_people_in_system():
     people_ids = set()
     
     # First, get all standalone people from database
-    people = Entity.objects.filter(type='person')
+    people = Person.objects.all()
     for person in people:
         people_ids.add(person.id)
     
-    # Then scan all entities for people references
-    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask', 'note']).prefetch_related('assigned_people')
-    for entity in entities:
-        # Get people from EntityPerson relationships
-        for entity_person in entity.assigned_people.all():
-            people_ids.add(entity_person.person.id)
+    # Then scan EntityPersonLink for all people references
+    for entity_person_link in EntityPersonLink.objects.select_related('person').all():
+        people_ids.add(entity_person_link.person.id)
     
     result = sorted(people_ids)
     cache.set(cache_key, result, 300)  # Cache for 5 minutes instead of 60 seconds
@@ -500,7 +504,7 @@ def get_all_notes_in_system():
         return cached
     
     notes = []
-    note_entities = Entity.objects.filter(type='note')
+    note_entities = Note.objects.all()
     for entity in note_entities:
         notes.append({
             'id': entity.id,
@@ -529,7 +533,7 @@ def get_all_entities_for_linking():
     }
     
     # Load projects
-    projects = Entity.objects.filter(type='project')
+    projects = Project.objects.all()
     for entity in projects:
         entities['projects'].append({
             'id': entity.id,
@@ -538,7 +542,7 @@ def get_all_entities_for_linking():
         })
     
     # Load epics
-    epics = Entity.objects.filter(type='epic')
+    epics = Epic.objects.all()
     for entity in epics:
         entities['epics'].append({
             'id': entity.id,
@@ -548,7 +552,7 @@ def get_all_entities_for_linking():
         })
     
     # Load tasks
-    tasks = Entity.objects.filter(type='task')
+    tasks = Task.objects.all()
     for entity in tasks:
         entities['tasks'].append({
             'id': entity.id,
@@ -559,7 +563,7 @@ def get_all_entities_for_linking():
         })
     
     # Load subtasks
-    subtasks = Entity.objects.filter(type='subtask')
+    subtasks = Subtask.objects.all()
     for entity in subtasks:
         entities['subtasks'].append({
             'id': entity.id,
@@ -587,41 +591,47 @@ def find_note_backlinks(note_id):
         'subtasks': []
     }
     
-    # Query all entities that might reference this note
-    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask'])
-    
-    for entity in entities:
+    # Query each entity type separately
+    for entity in Project.objects.all():
         notes_list = entity.notes or []
         if note_id in notes_list:
-            if entity.type == 'project':
-                backlinks['projects'].append({
-                    'id': entity.id,
-                    'title': entity.title or 'Untitled Project'
-                })
-            elif entity.type == 'epic':
-                backlinks['epics'].append({
-                    'id': entity.id,
-                    'project_id': entity.project_id,
-                    'title': entity.title or 'Untitled Epic',
-                    'seq_id': entity.seq_id or ''
-                })
-            elif entity.type == 'task':
-                backlinks['tasks'].append({
-                    'id': entity.id,
-                    'project_id': entity.project_id,
-                    'epic_id': entity.epic_id,
-                    'title': entity.title or 'Untitled Task',
-                    'seq_id': entity.seq_id or ''
-                })
-            elif entity.type == 'subtask':
-                backlinks['subtasks'].append({
-                    'id': entity.id,
-                    'project_id': entity.project_id,
-                    'epic_id': entity.epic_id,
-                    'task_id': entity.task_id,
-                    'title': entity.title or 'Untitled Subtask',
-                    'seq_id': entity.seq_id or ''
-                })
+            backlinks['projects'].append({
+                'id': entity.id,
+                'title': entity.title or 'Untitled Project'
+            })
+    
+    for entity in Epic.objects.all():
+        notes_list = entity.notes or []
+        if note_id in notes_list:
+            backlinks['epics'].append({
+                'id': entity.id,
+                'project_id': entity.project_id,
+                'title': entity.title or 'Untitled Epic',
+                'seq_id': entity.seq_id or ''
+            })
+    
+    for entity in Task.objects.all():
+        notes_list = entity.notes or []
+        if note_id in notes_list:
+            backlinks['tasks'].append({
+                'id': entity.id,
+                'project_id': entity.project_id,
+                'epic_id': entity.epic_id,
+                'title': entity.title or 'Untitled Task',
+                'seq_id': entity.seq_id or ''
+            })
+    
+    for entity in Subtask.objects.all():
+        notes_list = entity.notes or []
+        if note_id in notes_list:
+            backlinks['subtasks'].append({
+                'id': entity.id,
+                'project_id': entity.project_id,
+                'epic_id': entity.epic_id,
+                'task_id': entity.task_id,
+                'title': entity.title or 'Untitled Subtask',
+                'seq_id': entity.seq_id or ''
+            })
     
     return backlinks
 
@@ -642,7 +652,11 @@ def get_next_seq_id(project_id, entity_type):
     max_seq = 0
     
     # Query all entities of this type in the project
-    entities = Entity.objects.filter(type=entity_type, project_id=project_id)
+    model_class = get_entity_model(entity_type)
+    if not model_class:
+        return f"{prefix}1"
+    
+    entities = model_class.objects.filter(project_id=project_id)
     
     for entity in entities:
         seq = entity.seq_id or ''
@@ -659,10 +673,15 @@ def get_next_seq_id(project_id, entity_type):
 
 
 def _merge_people_from_entityperson(entity, metadata):
-    """Merge people from EntityPerson relationships into metadata if not already present."""
+    """Merge people from EntityPersonLink relationships into metadata if not already present."""
     if 'people' not in metadata or not metadata['people']:
-        # Load people from EntityPerson relationships
-        entity_people = EntityPerson.objects.filter(entity=entity).select_related('person')
+        # Get the ContentType for this entity
+        content_type = ContentType.objects.get_for_model(entity)
+        # Load people from EntityPersonLink relationships
+        entity_people = EntityPersonLink.objects.filter(
+            content_type=content_type,
+            object_id=entity.id
+        ).select_related('person')
         people_names = [ep.person.name for ep in entity_people]
         if people_names:
             metadata['people'] = people_names
@@ -700,49 +719,54 @@ def get_status_for_entity_type(entity_type):
 
 def _build_metadata_from_entity(entity):
     """Build metadata dict from Entity database fields."""
-    import json
     
-    # Start with fields from metadata_json if it exists (includes custom fields like note_project_id)
-    metadata = {}
-    if entity.metadata_json:
-        try:
-            metadata = json.loads(entity.metadata_json)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # Get ContentType for generic relationships
+    content_type = ContentType.objects.get_for_model(entity)
     
-    # Build/override with Entity fields (these are the canonical values)
-    metadata.update({
+    # Get labels and people using generic relationships
+    labels = [el.label.name for el in EntityLabelLink.objects.filter(
+        content_type=content_type, object_id=entity.id
+    ).select_related('label')]
+    
+    people = [ep.person.name for ep in EntityPersonLink.objects.filter(
+        content_type=content_type, object_id=entity.id
+    ).select_related('person')]
+    
+    # Build metadata from Entity fields
+    metadata = {
         'id': entity.id,
         'title': entity.title,
         'status': entity.status_fk.name if entity.status_fk else '',
         'priority': entity.priority,
         'created': entity.created or '',
         'updated': entity.updated or '',
-        'due_date': entity.due_date or '',
-        'schedule_start': entity.schedule_start or '',
-        'schedule_end': entity.schedule_end or '',
-        'labels': [el.label.name for el in entity.labels.all()],
-        'people': [ep.person.name for ep in entity.assigned_people.all()],
-        'notes': entity.notes or [],
-        'dependencies': entity.dependencies or [],
-        'checklist': entity.checklist or [],
-        'stats': entity.stats or {},
+        'due_date': entity.due_date_dt.isoformat() if entity.due_date_dt else '',
+        'schedule_start': entity.schedule_start_dt.isoformat() if entity.schedule_start_dt else '',
+        'schedule_end': entity.schedule_end_dt.isoformat() if entity.schedule_end_dt else '',
+        'labels': labels,
+        'people': people,
+        'notes': getattr(entity, 'notes', []) or [],
+        'dependencies': getattr(entity, 'dependencies', []) or [],
+        'checklist': getattr(entity, 'checklist', []) or [],
+        'stats': getattr(entity, 'stats', {}) or {},
         'seq_id': entity.seq_id or '',
         'archived': entity.archived,
-        'is_inbox_epic': entity.is_inbox_epic,
-        'color': entity.color or '',
-        'stats_version': entity.stats_version,
-        'stats_updated': entity.stats_updated.isoformat() if entity.stats_updated else '',
+        'is_inbox_epic': getattr(entity, 'is_inbox_epic', False),
+        'color': getattr(entity, 'color', '') or '',
+        'stats_version': getattr(entity, 'stats_version', None),
+        'stats_updated': entity.stats_updated.isoformat() if hasattr(entity, 'stats_updated') and entity.stats_updated else '',
         'updates': [{'timestamp': u.timestamp, 'content': u.content} 
                    for u in Update.objects.filter(entity_id=entity.id).order_by('timestamp')],
-    })
+    }
+    
     # Add relationship fields based on entity type
-    if entity.project_id:
+    if hasattr(entity, 'project') and entity.project:
         metadata['project_id'] = entity.project_id
-    if entity.epic_id:
+    if hasattr(entity, 'epic') and entity.epic:
         metadata['epic_id'] = entity.epic_id
-    if entity.task_id:
+    if hasattr(entity, 'task') and entity.task:
         metadata['task_id'] = entity.task_id
+    
     return metadata
 
 
@@ -754,14 +778,14 @@ def load_project(project_id, metadata_only=False):
         return None, None
 
     try:
-        entity = Entity.objects.select_related('status_fk').get(id=project_id, type='project')
+        entity = Project.objects.select_related('status_fk').get(id=project_id)
         # Build metadata from Entity fields
         metadata = _build_metadata_from_entity(entity)
         metadata = _merge_people_from_entityperson(entity, metadata)
         metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
-    except Entity.DoesNotExist:
+    except Project.DoesNotExist:
         return None, None
 
 
@@ -794,7 +818,7 @@ def load_epic(project_id, epic_id, metadata_only=False):
         return None, None
 
     try:
-        entity = Entity.objects.select_related('status_fk').get(id=epic_id, type='epic', project_id=project_id)
+        entity = Epic.objects.select_related('status_fk', 'project').get(id=epic_id, project_id=project_id)
         # Build metadata from Entity fields
         metadata = _build_metadata_from_entity(entity)
         if 'project_id' not in metadata:
@@ -803,7 +827,7 @@ def load_epic(project_id, epic_id, metadata_only=False):
         metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
-    except Entity.DoesNotExist:
+    except Epic.DoesNotExist:
         return None, None
 
 
@@ -846,12 +870,12 @@ def load_task(project_id, task_id, epic_id=None, metadata_only=False):
         return None, None
 
     try:
-        query = Entity.objects.select_related('status_fk').filter(id=task_id, type='task', project_id=project_id)
+        query = Task.objects.select_related('status_fk', 'project', 'epic').filter(id=task_id, project_id=project_id)
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
             # Match NULL epic_id (tasks without an epic)
-            query = query.filter(epic_id__isnull=True)
+            query = query.filter(epic__isnull=True)
         
         entity = query.get()
         # Build metadata from Entity fields
@@ -866,7 +890,7 @@ def load_task(project_id, task_id, epic_id=None, metadata_only=False):
         metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
-    except Entity.DoesNotExist:
+    except Task.DoesNotExist:
         return None, None
 
 
@@ -925,12 +949,12 @@ def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=Fa
         return None, None
 
     try:
-        query = Entity.objects.select_related('status_fk').filter(id=subtask_id, type='subtask', project_id=project_id, task_id=task_id)
+        query = Subtask.objects.select_related('status_fk', 'project', 'task', 'epic').filter(id=subtask_id, project_id=project_id, task_id=task_id)
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
             # Match NULL epic_id (subtasks without an epic)
-            query = query.filter(epic_id__isnull=True)
+            query = query.filter(epic__isnull=True)
         
         entity = query.get()
         # Build metadata from Entity fields
@@ -947,7 +971,7 @@ def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=Fa
         metadata['status_display'] = get_status_display(entity)
         content = entity.content if not metadata_only else None
         return metadata, content
-    except Entity.DoesNotExist:
+    except Subtask.DoesNotExist:
         return None, None
 
 
@@ -998,15 +1022,15 @@ def save_subtask(project_id, task_id, subtask_id, metadata, content, epic_id=Non
 def compute_project_stats(project_id):
     """Compute project overview stats for list view."""
     # Count epics
-    epics_count = Entity.objects.filter(type='epic', project_id=project_id).count()
+    epics_count = Epic.objects.filter(project_id=project_id).count()
     
     # Count tasks (with and without epic)
-    tasks = Entity.objects.filter(type='task', project_id=project_id)
+    tasks = Task.objects.filter(project_id=project_id)
     tasks_count = tasks.count()
     done_tasks_count = tasks.filter(status_fk__name='done').count()
     
     # Count subtasks
-    subtasks = Entity.objects.filter(type='subtask', project_id=project_id)
+    subtasks = Subtask.objects.filter(project_id=project_id)
     subtasks_count = subtasks.count()
     done_subtasks_count = subtasks.filter(status_fk__name='done').count()
 
@@ -1020,7 +1044,6 @@ def compute_project_stats(project_id):
         'done_subtasks_count': done_subtasks_count,
         'completion_percentage': completion_percentage
     }
-
 
 def update_project_stats(project_id):
     """Update cached stats in project metadata."""
@@ -1088,7 +1111,7 @@ def ensure_inbox_project():
         save_project(INBOX_PROJECT_ID, metadata, 'Inbox for quick capture. File items here for later organization.')
     
     # Ensure inbox has a default epic for tasks
-    epics = Entity.objects.filter(type='epic', project_id=INBOX_PROJECT_ID)
+    epics = Epic.objects.filter(project_id=INBOX_PROJECT_ID)
     if not epics.exists():
         # Create default inbox epic
         inbox_epic_id = f'epic-{uuid.uuid4().hex[:8]}'
@@ -1110,7 +1133,7 @@ def get_inbox_epic():
     ensure_inbox_project()
     
     # Query for inbox epic
-    epics = Entity.objects.filter(type='epic', project_id=INBOX_PROJECT_ID)
+    epics = Epic.objects.filter(project_id=INBOX_PROJECT_ID)
     for epic in epics:
         if epic.is_inbox_epic:
             return epic.id
@@ -1139,7 +1162,7 @@ def project_list(request):
     show_archived = request.GET.get('archived', 'false') == 'true'
 
     projects = []
-    project_entities = Entity.objects.select_related('status_fk').filter(type='project').exclude(id=INBOX_PROJECT_ID)
+    project_entities = Project.objects.select_related('status_fk').exclude(id=INBOX_PROJECT_ID)
     
     for entity in project_entities:
         is_archived = entity.archived
@@ -1270,7 +1293,7 @@ def project_detail(request, project):
     archived_epics = []
     open_epics = []
 
-    epic_entities = Entity.objects.select_related('status_fk').filter(type='epic', project_id=project).prefetch_related('labels')
+    epic_entities = Epic.objects.select_related('status_fk', 'project').filter(project_id=project)
     for epic_entity in epic_entities:
         epic_metadata = _build_metadata_from_entity(epic_entity)
         
@@ -1280,7 +1303,7 @@ def project_detail(request, project):
         tasks = []
         open_tasks = []
         
-        task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic_entity.id).prefetch_related('labels')
+        task_entities = Task.objects.select_related('status_fk', 'project', 'epic').filter(project_id=project, epic_id=epic_entity.id)
         for task_entity in task_entities:
             task_metadata = _build_metadata_from_entity(task_entity)
             
@@ -1290,8 +1313,8 @@ def project_detail(request, project):
                 'title': task_entity.title or task_metadata.get('title', 'Untitled Task'),
                 'status': status_name,
                 'status_display': get_status_display(task_entity),
-                'schedule_start': task_entity.schedule_start or task_metadata.get('schedule_start', ''),
-                'schedule_end': task_entity.schedule_end or task_metadata.get('schedule_end', '')
+                'schedule_start': task_entity.schedule_start_dt.isoformat() if task_entity.schedule_start_dt else task_metadata.get('schedule_start', ''),
+                'schedule_end': task_entity.schedule_end_dt.isoformat() if task_entity.schedule_end_dt else task_metadata.get('schedule_end', '')
             }
             tasks.append(task_data)
             
@@ -1299,7 +1322,7 @@ def project_detail(request, project):
             if task_data['status'] in ['todo', 'in_progress']:
                 # Load subtasks for open tasks
                 open_subtasks = []
-                subtask_entities = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id=epic_entity.id).prefetch_related('labels')
+                subtask_entities = Subtask.objects.select_related('status_fk', 'project', 'task', 'epic').filter(project_id=project, task_id=task_entity.id, epic_id=epic_entity.id)
                 for subtask_entity in subtask_entities:
                     subtask_metadata = _build_metadata_from_entity(subtask_entity)
                     
@@ -1354,7 +1377,7 @@ def project_detail(request, project):
     direct_tasks = []
     direct_open_tasks = []
     
-    direct_task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id__isnull=True).prefetch_related('labels')
+    direct_task_entities = Task.objects.select_related('status_fk', 'project').filter(project_id=project, epic__isnull=True)
     for task_entity in direct_task_entities:
         task_metadata = _build_metadata_from_entity(task_entity)
         
@@ -1367,9 +1390,9 @@ def project_detail(request, project):
             'seq_id': task_entity.seq_id or task_metadata.get('seq_id', ''),
             'priority': task_entity.priority or task_metadata.get('priority', ''),
             'created': task_entity.created or task_metadata.get('created', ''),
-            'due_date': task_entity.due_date or task_metadata.get('due_date', ''),
-            'schedule_start': task_entity.schedule_start or task_metadata.get('schedule_start', ''),
-            'schedule_end': task_entity.schedule_end or task_metadata.get('schedule_end', ''),
+            'due_date': task_entity.due_date_dt.isoformat() if task_entity.due_date_dt else task_metadata.get('due_date', ''),
+            'schedule_start': task_entity.schedule_start_dt.isoformat() if task_entity.schedule_start_dt else task_metadata.get('schedule_start', ''),
+            'schedule_end': task_entity.schedule_end_dt.isoformat() if task_entity.schedule_end_dt else task_metadata.get('schedule_end', ''),
             'epic_id': None  # Mark as direct task
         }
         direct_tasks.append(task_data)
@@ -1377,7 +1400,7 @@ def project_detail(request, project):
         # Check if it is an open task
         if task_data['status'] in ['todo', 'in_progress']:
             open_subtasks = []
-            subtask_entities = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id__isnull=True).prefetch_related('labels')
+            subtask_entities = Subtask.objects.select_related('status_fk', 'project', 'task').filter(project_id=project, task_id=task_entity.id, epic__isnull=True)
             for subtask_entity in subtask_entities:
                 subtask_metadata = _build_metadata_from_entity(subtask_entity)
                 
@@ -1502,7 +1525,7 @@ def epic_detail(request, project, epic):
     _, checklist_total, checklist_progress = calculate_checklist_progress(metadata)
 
     # Load tasks
-    task_entities = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic).prefetch_related('labels')
+    task_entities = Task.objects.select_related('status_fk').filter(project_id=project, epic_id=epic)
     tasks = []
     for entity in task_entities:
         task_metadata = _build_metadata_from_entity(entity)
@@ -1515,7 +1538,7 @@ def epic_detail(request, project, epic):
             'seq_id': entity.seq_id or task_metadata.get('seq_id', ''),
             'priority': entity.priority or task_metadata.get('priority', ''),
             'created': entity.created or task_metadata.get('created', ''),
-            'due_date': entity.due_date or task_metadata.get('due_date', ''),
+            'due_date': entity.due_date_dt.isoformat() if entity.due_date_dt else task_metadata.get('due_date', ''),
             'order': task_metadata.get('order', 0)
         })
 
@@ -1935,7 +1958,7 @@ def _task_detail_impl(request, project, task, epic=None):
 
     # Load subtasks
     subtasks = []
-    subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task)
+    subtask_entities = Subtask.objects.filter(project_id=project, task_id=task)
     if epic:
         subtask_entities = subtask_entities.filter(epic_id=epic)
     else:
@@ -1950,7 +1973,7 @@ def _task_detail_impl(request, project, task, epic=None):
             'status_display': get_status_display(entity),
             'priority': entity.priority or '',
             'created': entity.created or '',
-            'due_date': entity.due_date or '',
+            'due_date': entity.due_date_dt.isoformat() if entity.due_date_dt else '',
             'order': 0  # Order field not in Entity model, default to 0
         })
 
@@ -2882,15 +2905,15 @@ def get_all_scheduled_tasks():
     scheduled_tasks = []
     
     # Query all tasks with schedule_start or schedule_end
-    tasks = Entity.objects.select_related('status_fk').filter(type='task').exclude(
+    tasks = Task.objects.select_related('status_fk', 'project', 'epic').exclude(
         schedule_start='', schedule_end=''
     ).exclude(schedule_start__isnull=True, schedule_end__isnull=True)
     
     for task in tasks:
-        if task.schedule_start or task.schedule_end:
+        if task.schedule_start_dt or task.schedule_end_dt:
             # Get project color
             try:
-                project = Entity.objects.get(id=task.project_id, type='project')
+                project = Project.objects.get(id=task.project_id)
                 project_color = get_project_color(task.project_id, project.color)
             except Entity.DoesNotExist:
                 project_color = get_project_color(task.project_id, None)
@@ -2904,8 +2927,8 @@ def get_all_scheduled_tasks():
                 'seq_id': task.seq_id or '',
                 'status': task_status,
                 'status_display': get_status_display(task),
-                'schedule_start': task.schedule_start or '',
-                'schedule_end': task.schedule_end or '',
+                'schedule_start': task.schedule_start_dt.isoformat() if task.schedule_start_dt else '',
+                'schedule_end': task.schedule_end_dt.isoformat() if task.schedule_end_dt else '',
                 'project_color': project_color,
                 'project_color_bg': hex_to_rgba(project_color, 0.15)
             })
@@ -2922,7 +2945,7 @@ def get_all_projects_hierarchy():
         return cached
 
     projects = []
-    project_entities = Entity.objects.filter(type='project')
+    project_entities = Project.objects.all()
     
     for project in project_entities:
         project_data = {
@@ -2932,7 +2955,7 @@ def get_all_projects_hierarchy():
         }
         
         # Load epics for this project
-        epics = Entity.objects.filter(type='epic', project_id=project.id).order_by('id').prefetch_related('labels')
+        epics = Epic.objects.filter(project_id=project.id).order_by('id')
         for epic in epics:
             epic_data = {
                 'id': epic.id,
@@ -2942,7 +2965,7 @@ def get_all_projects_hierarchy():
             }
             
             # Load tasks for this epic
-            tasks = Entity.objects.filter(type='task', project_id=project.id, epic_id=epic.id).prefetch_related('labels')
+            tasks = Task.objects.filter(project_id=project.id, epic_id=epic.id)
             for task in tasks:
                 task_data = {
                     'id': task.id,
@@ -2953,7 +2976,7 @@ def get_all_projects_hierarchy():
                 }
                 
                 # Load subtasks for this task
-                subtasks = Entity.objects.filter(type='subtask', project_id=project.id, task_id=task.id, epic_id=epic.id).prefetch_related('labels')
+                subtasks = Subtask.objects.filter(project_id=project.id, task_id=task.id, epic_id=epic.id)
                 for subtask in subtasks:
                     task_data['subtasks'].append({
                         'id': subtask.id,
@@ -2966,7 +2989,7 @@ def get_all_projects_hierarchy():
             project_data['epics'].append(epic_data)
         
         # Load tasks directly under project (without epic)
-        direct_tasks_entities = Entity.objects.filter(type='task', project_id=project.id, epic_id__isnull=True).prefetch_related('labels')
+        direct_tasks_entities = Task.objects.filter(project_id=project.id, epic__isnull=True)
         direct_tasks = []
         for task in direct_tasks_entities:
             task_data = {
@@ -2978,7 +3001,7 @@ def get_all_projects_hierarchy():
             }
             
             # Load subtasks for direct tasks
-            subtasks = Entity.objects.filter(type='subtask', project_id=project.id, task_id=task.id, epic_id__isnull=True).prefetch_related('labels')
+            subtasks = Subtask.objects.filter(project_id=project.id, task_id=task.id, epic__isnull=True)
             for subtask in subtasks:
                 task_data['subtasks'].append({
                     'id': subtask.id,
@@ -3025,13 +3048,13 @@ def get_all_work_items():
     items = []
 
     # Query all tasks with project and epic data
-    tasks = Entity.objects.filter(type='task').select_related('status_fk').prefetch_related('labels')
+    tasks = Task.objects.all().select_related('status_fk')
     for task in tasks:
         # Get project title
         project_title = ''
         if task.project_id:
             try:
-                project_entity = Entity.objects.get(id=task.project_id, type='project')
+                project_entity = Project.objects.get(id=task.project_id)
                 project_title = project_entity.title or task.project_id
             except Entity.DoesNotExist:
                 project_title = task.project_id
@@ -3040,7 +3063,7 @@ def get_all_work_items():
         epic_title = ''
         if task.epic_id:
             try:
-                epic_entity = Entity.objects.get(id=task.epic_id, type='epic')
+                epic_entity = Epic.objects.get(id=task.epic_id)
                 epic_title = epic_entity.title or task.epic_id
             except Entity.DoesNotExist:
                 epic_title = task.epic_id
@@ -3052,7 +3075,7 @@ def get_all_work_items():
             'status': task.status_fk.name if task.status_fk else 'todo',
             'status_display': task.status_fk.display_name if task.status_fk else 'Todo',
             'priority': task.priority or '',
-            'due_date': task.due_date or '',
+            'due_date': task.due_date_dt.isoformat() if task.due_date_dt else '',
             'project_id': task.project_id,
             'project_title': project_title,
             'epic_id': task.epic_id,
@@ -3060,13 +3083,13 @@ def get_all_work_items():
         })
 
     # Query all subtasks with project and epic data
-    subtasks = Entity.objects.filter(type='subtask').select_related('status_fk').prefetch_related('labels')
+    subtasks = Subtask.objects.all().select_related('status_fk')
     for subtask in subtasks:
         # Get project title
         project_title = ''
         if subtask.project_id:
             try:
-                project_entity = Entity.objects.get(id=subtask.project_id, type='project')
+                project_entity = Project.objects.get(id=subtask.project_id)
                 project_title = project_entity.title or subtask.project_id
             except Entity.DoesNotExist:
                 project_title = subtask.project_id
@@ -3075,7 +3098,7 @@ def get_all_work_items():
         epic_title = ''
         if subtask.epic_id:
             try:
-                epic_entity = Entity.objects.get(id=subtask.epic_id, type='epic')
+                epic_entity = Epic.objects.get(id=subtask.epic_id)
                 epic_title = epic_entity.title or subtask.epic_id
             except Entity.DoesNotExist:
                 epic_title = subtask.epic_id
@@ -3088,7 +3111,7 @@ def get_all_work_items():
             'status': subtask.status_fk.name if subtask.status_fk else 'todo',
             'status_display': subtask.status_fk.display_name if subtask.status_fk else 'Todo',
             'priority': subtask.priority or '',
-            'due_date': subtask.due_date or '',
+            'due_date': subtask.due_date_dt.isoformat() if subtask.due_date_dt else '',
             'project_id': subtask.project_id,
             'project_title': project_title,
             'epic_id': subtask.epic_id,
@@ -3108,7 +3131,7 @@ def find_entity_in_project(project_id, entity_id):
     """
     # Check if it's a task
     try:
-        task = Entity.objects.get(id=entity_id, type='task', project_id=project_id)
+        task = Task.objects.get(id=entity_id, project_id=project_id)
         return {
             'type': 'task',
             'epic_id': task.epic_id,
@@ -3119,7 +3142,7 @@ def find_entity_in_project(project_id, entity_id):
     
     # Check if it's a subtask
     try:
-        subtask = Entity.objects.get(id=entity_id, type='subtask', project_id=project_id)
+        subtask = Subtask.objects.get(id=entity_id, project_id=project_id)
         return {
             'type': 'subtask',
             'epic_id': subtask.epic_id,
@@ -3196,12 +3219,12 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
     
     # Cache epic titles
     epic_titles = {}
-    epics = Entity.objects.filter(type='epic', project_id=project_id)
+    epics = Epic.objects.filter(project_id=project_id)
     for epic in epics:
         epic_titles[epic.id] = epic.title or 'Untitled Epic'
     
     # Query all tasks in the project (with and without epic)
-    tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project_id).prefetch_related('labels')
+    tasks = Task.objects.select_related('status_fk', 'project', 'epic').filter(project_id=project_id)
     for task in tasks:
         if exclude_task_id and task.id == exclude_task_id:
             continue
@@ -3223,7 +3246,7 @@ def get_project_tasks_for_dependencies(project_id, exclude_task_id=None, exclude
         task_seq = task.seq_id or ''
         
         # Query subtasks for this task
-        subtasks = Entity.objects.select_related('status_fk').filter(type='subtask', project_id=project_id, task_id=task.id).prefetch_related('labels')
+        subtasks = Subtask.objects.select_related('status_fk').filter(project_id=project_id, task_id=task.id)
         for subtask in subtasks:
             if exclude_subtask_id and subtask.id == exclude_subtask_id:
                 continue
@@ -3298,7 +3321,7 @@ def get_project_activity(project_id):
         })
     
     # Query all epics in the project
-    epics = Entity.objects.filter(type='epic', project_id=project_id)
+    epics = Epic.objects.filter(project_id=project_id)
     for epic in epics:
         # Get updates from Update table
         updates = Update.objects.filter(entity_id=epic.id).order_by('timestamp')
@@ -3321,7 +3344,7 @@ def get_project_activity(project_id):
             })
     
     # Query all tasks in the project (with and without epic)
-    tasks = Entity.objects.filter(type='task', project_id=project_id)
+    tasks = Task.objects.filter(project_id=project_id)
     for task in tasks:
         # Get updates from Update table
         updates = Update.objects.filter(entity_id=task.id).order_by('timestamp')
@@ -3350,7 +3373,7 @@ def get_project_activity(project_id):
             })
     
     # Query all subtasks in the project
-    subtasks = Entity.objects.filter(type='subtask', project_id=project_id)
+    subtasks = Subtask.objects.filter(project_id=project_id)
     for subtask in subtasks:
         # Get updates from Update table
         updates = Update.objects.filter(entity_id=subtask.id).order_by('timestamp')
@@ -3844,7 +3867,7 @@ def bulk_update_items(request):
                         continue
                     
                     try:
-                        task_entity = Entity.objects.get(id=item_id, type='task', project_id=project_id)
+                        task_entity = Task.objects.get(id=item_id, project_id=project_id)
                         actual_epic_id = task_entity.epic_id if task_entity.epic_id else None
                     except Entity.DoesNotExist:
                         continue
@@ -3893,7 +3916,7 @@ def bulk_update_items(request):
                         continue
                     
                     try:
-                        subtask_entity = Entity.objects.get(id=item_id, type='subtask', project_id=project_id, task_id=task_id)
+                        subtask_entity = Subtask.objects.get(id=item_id, project_id=project_id, task_id=task_id)
                         actual_epic_id = subtask_entity.epic_id if subtask_entity.epic_id else None
                     except Entity.DoesNotExist:
                         continue
@@ -4162,7 +4185,7 @@ def kanban_view(request, project=None, epic=None):
             raise Http404("Epic not found")
         
         items = []
-        tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic)
+        tasks = Task.objects.select_related('status_fk').filter(project_id=project, epic_id=epic)
         for task in tasks:
             if not task.archived:
                 task_status = task.status_fk.name if task.status_fk else 'todo'
@@ -4196,13 +4219,13 @@ def kanban_view(request, project=None, epic=None):
             raise Http404("Project not found")
         
         items = []
-        epics = Entity.objects.filter(type='epic', project_id=project)
+        epics = Epic.objects.filter(project_id=project)
         for epic_entity in epics:
             if epic_entity.archived:
                 continue
             
             epic_title = epic_entity.title or 'Untitled Epic'
-            tasks = Entity.objects.select_related('status_fk').filter(type='task', project_id=project, epic_id=epic_entity.id)
+            tasks = Task.objects.select_related('status_fk').filter(project_id=project, epic_id=epic_entity.id)
             for task in tasks:
                 if not task.archived:
                     task_status = task.status_fk.name if task.status_fk else 'todo'
@@ -4358,7 +4381,7 @@ def search_view(request):
 def notes_list(request):
     """Display list of all notes."""
     notes = []
-    note_entities = Entity.objects.filter(type='note').order_by('-updated', '-created')
+    note_entities = Note.objects.all().order_by('-updated', '-created')
     
     for entity in note_entities:
         metadata, content = load_note(entity.id)
@@ -4431,27 +4454,39 @@ def find_person_references(person_id):
     person_name = person_meta.get('name', '')
     person_normalized = person_name.strip().lstrip('@')
     
-    # Query all entities that might reference this person
-    entities = Entity.objects.filter(type__in=['project', 'epic', 'task', 'subtask', 'note'])
+    # Query all entity person links for this person
+    from django.contrib.contenttypes.models import ContentType
     
-    for entity in entities:
-        # Get people from EntityPerson relationships
-        entity_people = [ep.person.name for ep in entity.assigned_people.all()]
-        people = normalize_people(entity_people)
-        if person_normalized in people:
-            if entity.type == 'project':
+    # Get content types for our models
+    project_ct = ContentType.objects.get_for_model(Project)
+    epic_ct = ContentType.objects.get_for_model(Epic)
+    task_ct = ContentType.objects.get_for_model(Task)
+    subtask_ct = ContentType.objects.get_for_model(Subtask)
+    note_ct = ContentType.objects.get_for_model(Note)
+    
+    # Get all entity person links for this person
+    try:
+        person_obj = Person.objects.get(id=person_id)
+    except Person.DoesNotExist:
+        return references
+    
+    entity_links = EntityPersonLink.objects.filter(person=person_obj)
+    
+    for link in entity_links:
+        ct_id = link.content_type_id
+        obj_id = link.object_id
+        
+        try:
+            if ct_id == project_ct.id:
+                entity = Project.objects.get(id=obj_id)
                 references['projects'].append({
                     'id': entity.id,
                     'title': entity.title or 'Untitled Project',
                     'url': reverse('project_detail', kwargs={'project': entity.id})
                 })
-            elif entity.type == 'epic':
-                # Get project title
-                try:
-                    project = Entity.objects.get(id=entity.project_id, type='project')
-                    project_title = project.title or 'Untitled Project'
-                except Entity.DoesNotExist:
-                    project_title = 'Untitled Project'
+            elif ct_id == epic_ct.id:
+                entity = Epic.objects.get(id=obj_id)
+                project_title = entity.project.title if entity.project else 'Untitled Project'
                 
                 references['epics'].append({
                     'id': entity.id,
@@ -4461,21 +4496,10 @@ def find_person_references(person_id):
                     'project_title': project_title,
                     'url': reverse('epic_detail', kwargs={'project': entity.project_id, 'epic': entity.id})
                 })
-            elif entity.type == 'task':
-                # Get project and epic titles
-                try:
-                    project = Entity.objects.get(id=entity.project_id, type='project')
-                    project_title = project.title or 'Untitled Project'
-                except Entity.DoesNotExist:
-                    project_title = 'Untitled Project'
-                
-                epic_title = None
-                if entity.epic_id:
-                    try:
-                        epic = Entity.objects.get(id=entity.epic_id, type='epic')
-                        epic_title = epic.title or 'Untitled Epic'
-                    except Entity.DoesNotExist:
-                        pass
+            elif ct_id == task_ct.id:
+                entity = Task.objects.select_related('project', 'epic').get(id=obj_id)
+                project_title = entity.project.title if entity.project else 'Untitled Project'
+                epic_title = entity.epic.title if entity.epic else None
                 
                 if entity.epic_id:
                     url = reverse('task_detail', kwargs={'project': entity.project_id, 'epic': entity.epic_id, 'task': entity.id})
@@ -4492,29 +4516,11 @@ def find_person_references(person_id):
                     'project_title': project_title,
                     'url': url
                 })
-            elif entity.type == 'subtask':
-                # Get project, epic, and task titles
-                try:
-                    project = Entity.objects.get(id=entity.project_id, type='project')
-                    project_title = project.title or 'Untitled Project'
-                except Entity.DoesNotExist:
-                    project_title = 'Untitled Project'
-                
-                epic_title = None
-                if entity.epic_id:
-                    try:
-                        epic = Entity.objects.get(id=entity.epic_id, type='epic')
-                        epic_title = epic.title or 'Untitled Epic'
-                    except Entity.DoesNotExist:
-                        pass
-                
-                task_title = None
-                if entity.task_id:
-                    try:
-                        task = Entity.objects.get(id=entity.task_id, type='task')
-                        task_title = task.title or 'Untitled Task'
-                    except Entity.DoesNotExist:
-                        pass
+            elif ct_id == subtask_ct.id:
+                entity = Subtask.objects.select_related('project', 'epic', 'task').get(id=obj_id)
+                project_title = entity.project.title if entity.project else 'Untitled Project'
+                epic_title = entity.epic.title if entity.epic else None
+                task_title = entity.task.title if entity.task else None
                 
                 if entity.epic_id:
                     url = reverse('subtask_detail', kwargs={'project': entity.project_id, 'epic': entity.epic_id, 'task': entity.task_id, 'subtask': entity.id})
@@ -4533,7 +4539,8 @@ def find_person_references(person_id):
                     'project_title': project_title,
                     'url': url
                 })
-            elif entity.type == 'note':
+            elif ct_id == note_ct.id:
+                entity = Note.objects.get(id=obj_id)
                 references['notes'].append({
                     'id': entity.id,
                     'title': entity.title or 'Untitled Note',
@@ -4541,6 +4548,9 @@ def find_person_references(person_id):
                     'updated': entity.updated or '',
                     'url': reverse('note_detail', kwargs={'note_id': entity.id})
                 })
+        except (Project.DoesNotExist, Epic.DoesNotExist, Task.DoesNotExist, Subtask.DoesNotExist, Note.DoesNotExist):
+            # Entity was deleted but link still exists - skip it
+            pass
     
     return references
 
@@ -4673,7 +4683,7 @@ def load_note(note_id, metadata_only=False):
         return None, None
     
     try:
-        entity = Entity.objects.select_related('status_fk').get(id=note_id, type='note')
+        entity = Note.objects.select_related('status_fk').get(id=note_id)
         # Build metadata from Entity fields
         metadata = _build_metadata_from_entity(entity)
         metadata = _merge_people_from_entityperson(entity, metadata)
@@ -4880,7 +4890,7 @@ def note_detail(request, note_id):
                         epics_data = []
                         tasks_data = []
                         
-                        epic_entities = Entity.objects.filter(type='epic', project_id=project_id)
+                        epic_entities = Epic.objects.filter(project_id=project_id)
                         for epic_entity in epic_entities:
                             epic_meta = _build_metadata_from_entity(epic_entity)
                             epics_data.append({
@@ -4889,13 +4899,13 @@ def note_detail(request, note_id):
                                 'seq_id': epic_entity.seq_id or ''
                             })
                         
-                        task_entities = Entity.objects.filter(type='task', project_id=project_id)
+                        task_entities = Task.objects.filter(project_id=project_id)
                         for task_entity in task_entities:
                             task_meta = _build_metadata_from_entity(task_entity)
                             epic_title = 'No Epic'
                             if task_entity.epic_id:
                                 try:
-                                    epic = Entity.objects.get(id=task_entity.epic_id, type='epic')
+                                    epic = Epic.objects.get(id=task_entity.epic_id)
                                     epic_title = epic.title or 'Untitled Epic'
                                 except Entity.DoesNotExist:
                                     pass
@@ -5102,7 +5112,7 @@ def note_detail(request, note_id):
     # Get all epics from the note project (for task creation dropdown)
     project_epics = []
     if note_project_id:
-        epics = Entity.objects.filter(type='epic', project_id=note_project_id)
+        epics = Epic.objects.filter(project_id=note_project_id)
         for epic in epics:
             project_epics.append({
                 'id': epic.id,
@@ -5118,14 +5128,14 @@ def note_detail(request, note_id):
         for task_id in note_task_ids:
             if validate_id(task_id, 'task'):
                 try:
-                    task = Entity.objects.get(id=task_id, type='task', project_id=note_project_id)
+                    task = Task.objects.get(id=task_id, project_id=note_project_id)
                     # Find epic title
                     epic_title = 'Untitled Epic'
                     if task.epic_id:
                         try:
-                            epic = Entity.objects.get(id=task.epic_id, type='epic')
+                            epic = Epic.objects.get(id=task.epic_id)
                             epic_title = epic.title or 'Untitled Epic'
-                        except Entity.DoesNotExist:
+                        except Epic.DoesNotExist:
                             pass
                     
                     note_tasks.append({
@@ -5143,15 +5153,15 @@ def note_detail(request, note_id):
     # Get all tasks from the note project (for linking in the creation section)
     all_tasks_available = []
     if note_project_id:
-        tasks = Entity.objects.filter(type='task', project_id=note_project_id).exclude(id__in=note_task_ids)
+        tasks = Task.objects.filter(project_id=note_project_id).exclude(id__in=note_task_ids)
         for task in tasks:
             # Find epic title
             epic_title = 'Untitled Epic'
             if task.epic_id:
                 try:
-                    epic = Entity.objects.get(id=task.epic_id, type='epic')
+                    epic = Epic.objects.get(id=task.epic_id)
                     epic_title = epic.title or 'Untitled Epic'
-                except Entity.DoesNotExist:
+                except Epic.DoesNotExist:
                     pass
             
             all_tasks_available.append({
@@ -5220,7 +5230,7 @@ def delete_note(request, note_id):
             raise Http404("Invalid note ID")
         # Delete note from database
         try:
-            note = Entity.objects.get(id=note_id, type='note')
+            note = Note.objects.get(id=note_id)
             note.delete()
         except Entity.DoesNotExist:
             pass
@@ -5408,7 +5418,7 @@ def get_all_projects_for_dropdown():
     """Get all active projects for dropdown selection."""
     projects_dir = safe_join_path('projects')
     projects = []
-    project_entities = Entity.objects.select_related('status_fk').filter(type='project').exclude(id=INBOX_PROJECT_ID)
+    project_entities = Project.objects.select_related('status_fk').exclude(id=INBOX_PROJECT_ID)
     for project in project_entities:
         if not project.archived:
             projects.append({
@@ -5596,7 +5606,7 @@ def move_task(request, project, epic, task):
         for p in projects:
             p_id = p['id']
             epics = []
-            epic_entities = Entity.objects.filter(type='epic', project_id=p_id)
+            epic_entities = Epic.objects.filter(project_id=p_id)
             for epic in epic_entities:
                 if not epic.archived:
                     epics.append({
@@ -5664,7 +5674,7 @@ def move_task(request, project, epic, task):
         
         # Load all subtasks first
         subtasks_to_move = []
-        subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task)
+        subtask_entities = Subtask.objects.filter(project_id=project, task_id=task)
         if epic:
             subtask_entities = subtask_entities.filter(epic_id=epic)
         else:
@@ -5692,7 +5702,7 @@ def move_task(request, project, epic, task):
         
         # Update dependencies: tasks that reference this task need to be updated
         # Find all tasks/subtasks that have this task in their blocks/blocked_by
-        all_tasks = Entity.objects.filter(type='task')
+        all_tasks = Task.objects.all()
         for t_entity in all_tasks:
             t_meta = _build_metadata_from_entity(t_entity)
             t_content = t_entity.content
@@ -5712,7 +5722,7 @@ def move_task(request, project, epic, task):
                 save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
         
         # Check subtasks for dependencies
-        all_subtasks = Entity.objects.filter(type='subtask')
+        all_subtasks = Subtask.objects.all()
         for s_entity in all_subtasks:
             s_meta = _build_metadata_from_entity(s_entity)
             s_content = s_entity.content
@@ -5801,14 +5811,14 @@ def move_epic(request, project, epic):
         
         # Load all tasks and their subtasks
         tasks_to_move = []
-        task_entities = Entity.objects.filter(type='task', project_id=project, epic_id=epic)
+        task_entities = Task.objects.filter(project_id=project, epic_id=epic)
         for task_entity in task_entities:
             task_meta = _build_metadata_from_entity(task_entity)
             task_content = task_entity.content
             
             # Load subtasks for this task
             subtasks_to_move = []
-            subtask_entities = Entity.objects.filter(type='subtask', project_id=project, task_id=task_entity.id, epic_id=epic)
+            subtask_entities = Subtask.objects.filter(project_id=project, task_id=task_entity.id, epic_id=epic)
             for subtask in subtask_entities:
                 subtask_meta = _build_metadata_from_entity(subtask)
                 subtasks_to_move.append((subtask.id, subtask_meta, subtask.content))
@@ -5854,7 +5864,7 @@ def move_epic(request, project, epic):
             subtask_ids_moved.extend([s[0] for s in subtasks])
         
         # Query all tasks for dependencies
-        all_tasks = Entity.objects.filter(type='task')
+        all_tasks = Task.objects.all()
         for t_entity in all_tasks:
             t_meta = _build_metadata_from_entity(t_entity)
             t_content = t_entity.content
@@ -5883,7 +5893,7 @@ def move_epic(request, project, epic):
                 save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
         
         # Query all subtasks for dependencies
-        all_subtasks = Entity.objects.filter(type='subtask')
+        all_subtasks = Subtask.objects.all()
         for s_entity in all_subtasks:
             s_meta = _build_metadata_from_entity(s_entity)
             s_content = s_entity.content
@@ -5938,12 +5948,12 @@ def move_subtask(request, project, task, subtask, epic=None):
         for p in projects:
             p_id = p['id']
             epics = []
-            epic_entities = Entity.objects.filter(type='epic', project_id=p_id)
+            epic_entities = Epic.objects.filter(project_id=p_id)
             for epic in epic_entities:
                 if not epic.archived:
                     # Get tasks for this epic
                     tasks = []
-                    task_entities = Entity.objects.filter(type='task', project_id=p_id, epic_id=epic.id)
+                    task_entities = Task.objects.filter(project_id=p_id, epic_id=epic.id)
                     for task in task_entities:
                         tasks.append({
                             'id': task.id,
@@ -5960,7 +5970,7 @@ def move_subtask(request, project, task, subtask, epic=None):
             
             # Also get direct tasks (without epic)
             direct_tasks = []
-            direct_task_entities = Entity.objects.filter(type='task', project_id=p_id, epic_id__isnull=True)
+            direct_task_entities = Task.objects.filter(project_id=p_id, epic__isnull=True)
             for task in direct_task_entities:
                 direct_tasks.append({
                     'id': task.id,
@@ -6045,7 +6055,7 @@ def move_subtask(request, project, task, subtask, epic=None):
         
         # Update dependencies: entities that reference this subtask need to be updated
         # Query all tasks for dependencies
-        all_tasks = Entity.objects.filter(type='task')
+        all_tasks = Task.objects.all()
         for t_entity in all_tasks:
             t_meta = _build_metadata_from_entity(t_entity)
             t_content = t_entity.content
@@ -6064,7 +6074,7 @@ def move_subtask(request, project, task, subtask, epic=None):
                 save_task(t_entity.project_id, t_entity.id, t_meta, t_content, epic_id=t_entity.epic_id)
         
         # Query all subtasks for dependencies
-        all_subtasks = Entity.objects.filter(type='subtask')
+        all_subtasks = Subtask.objects.all()
         for s_entity in all_subtasks:
             s_meta = _build_metadata_from_entity(s_entity)
             s_content = s_entity.content
