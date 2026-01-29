@@ -30,6 +30,11 @@ class Person(models.Model):
     name = models.CharField(max_length=200, unique=True)  # Normalized name
     display_name = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    job_title = models.CharField(max_length=200, blank=True)
+    company = models.CharField(max_length=200, blank=True)
+    notes = models.JSONField(default=list, blank=True)  # Array of note IDs linked to this person
+    content = models.TextField(blank=True)  # Ad-hoc notes content (markdown)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
     metadata_json = models.TextField(blank=True)  # For backward compatibility

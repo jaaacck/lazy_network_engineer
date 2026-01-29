@@ -8,7 +8,12 @@
     @{{ person_name }}
 </div>
 
-<div class="page-title">@{{ person_name }}</div>
+<div class="page-title">
+    <span>@{{ person_name }}</span>
+    <div class="mode-toggle">
+        <button id="person-edit-btn">edit</button>
+    </div>
+</div>
 
 <div class="section">
     <div class="section-title">
@@ -17,37 +22,68 @@
     <div class="overview-section">
         <div class="overview-row">
             <div class="overview-field">
-                <strong>Name:</strong> {{ metadata.name|default:person_name }}
+                <strong>Display Name:</strong> 
+                <span class="field-display" id="display_name-display">{{ metadata.display_name|default:person_name }}</span>
+                <div class="field-edit" id="display_name-edit" style="display: none;">
+                    <input type="text" id="display_name-input" value="{{ metadata.display_name|default:person_name }}">
+                    <button class="field-save-btn" data-field="display_name">Save</button>
+                    <button class="field-cancel-btn" data-field="display_name">Cancel</button>
+                </div>
+                <button class="field-edit-icon" data-field="display_name" style="display: none;">edit</button>
             </div>
         </div>
-        {% if metadata.job_title %}
         <div class="overview-row">
             <div class="overview-field">
-                <strong>Job Title:</strong> {{ metadata.job_title }}
+                <strong>Email:</strong> 
+                <span class="field-display" id="email-display">
+                    {% if metadata.email %}<a href="mailto:{{ metadata.email }}">{{ metadata.email }}</a>{% else %}<span class="empty-field">Not set</span>{% endif %}
+                </span>
+                <div class="field-edit" id="email-edit" style="display: none;">
+                    <input type="email" id="email-input" value="{{ metadata.email }}">
+                    <button class="field-save-btn" data-field="email">Save</button>
+                    <button class="field-cancel-btn" data-field="email">Cancel</button>
+                </div>
+                <button class="field-edit-icon" data-field="email" style="display: none;">edit</button>
             </div>
         </div>
-        {% endif %}
-        {% if metadata.company %}
         <div class="overview-row">
             <div class="overview-field">
-                <strong>Company:</strong> {{ metadata.company }}
+                <strong>Phone:</strong> 
+                <span class="field-display" id="phone-display">
+                    {% if metadata.phone %}<a href="tel:{{ metadata.phone }}">{{ metadata.phone }}</a>{% else %}<span class="empty-field">Not set</span>{% endif %}
+                </span>
+                <div class="field-edit" id="phone-edit" style="display: none;">
+                    <input type="tel" id="phone-input" value="{{ metadata.phone }}">
+                    <button class="field-save-btn" data-field="phone">Save</button>
+                    <button class="field-cancel-btn" data-field="phone">Cancel</button>
+                </div>
+                <button class="field-edit-icon" data-field="phone" style="display: none;">edit</button>
             </div>
         </div>
-        {% endif %}
-        {% if metadata.email %}
         <div class="overview-row">
             <div class="overview-field">
-                <strong>Email:</strong> <a href="mailto:{{ metadata.email }}">{{ metadata.email }}</a>
+                <strong>Job Title:</strong> 
+                <span class="field-display" id="job_title-display">{{ metadata.job_title|default:"" }}{% if not metadata.job_title %}<span class="empty-field">Not set</span>{% endif %}</span>
+                <div class="field-edit" id="job_title-edit" style="display: none;">
+                    <input type="text" id="job_title-input" value="{{ metadata.job_title }}">
+                    <button class="field-save-btn" data-field="job_title">Save</button>
+                    <button class="field-cancel-btn" data-field="job_title">Cancel</button>
+                </div>
+                <button class="field-edit-icon" data-field="job_title" style="display: none;">edit</button>
             </div>
         </div>
-        {% endif %}
-        {% if metadata.phone %}
         <div class="overview-row">
             <div class="overview-field">
-                <strong>Phone:</strong> <a href="tel:{{ metadata.phone }}">{{ metadata.phone }}</a>
+                <strong>Company:</strong> 
+                <span class="field-display" id="company-display">{{ metadata.company|default:"" }}{% if not metadata.company %}<span class="empty-field">Not set</span>{% endif %}</span>
+                <div class="field-edit" id="company-edit" style="display: none;">
+                    <input type="text" id="company-input" value="{{ metadata.company }}">
+                    <button class="field-save-btn" data-field="company">Save</button>
+                    <button class="field-cancel-btn" data-field="company">Cancel</button>
+                </div>
+                <button class="field-edit-icon" data-field="company" style="display: none;">edit</button>
             </div>
         </div>
-        {% endif %}
         <div class="overview-row">
             <div class="overview-field">
                 <strong>First Created:</strong> 
@@ -61,6 +97,24 @@
                     Not set
                 {% endif %}
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Notes Section -->
+<div class="section" id="person-notes-container">
+    <div class="section-title">
+        <span>Notes</span>
+        <button class="description-edit-btn" id="person-notes-edit-icon-btn" style="display: none;">edit</button>
+    </div>
+    <div class="content" id="person-notes-display">
+        {% if content %}{{ content|markdownify|safe }}{% else %}<span style="color: #828282;">No notes yet. Click edit to add notes.</span>{% endif %}
+    </div>
+    <div id="person-notes-editor-container" style="display: none; margin-top: 10px;">
+        <textarea id="person-notes-editor">{% if content %}{{ content }}{% endif %}</textarea>
+        <div class="description-actions" style="margin-top: 10px;">
+            <button type="button" id="person-notes-save-btn">Save</button>
+            <button type="button" id="person-notes-cancel-btn">Cancel</button>
         </div>
     </div>
 </div>
@@ -156,4 +210,247 @@
     <div class="empty">No references found for @{{ person_name }}.</div>
     {% endif %}
 </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Person field inline editing
+    var personEditBtn = document.getElementById('person-edit-btn');
+    var editMode = false;
+    
+    // Toggle edit mode
+    if (personEditBtn) {
+        personEditBtn.addEventListener('click', function() {
+            editMode = !editMode;
+            
+            if (editMode) {
+                personEditBtn.textContent = 'view';
+                // Show all edit icons
+                document.querySelectorAll('.field-edit-icon').forEach(function(btn) {
+                    btn.style.display = 'inline-block';
+                });
+                // Show notes edit button
+                var notesEditIconBtn = document.getElementById('person-notes-edit-icon-btn');
+                if (notesEditIconBtn) {
+                    notesEditIconBtn.style.display = 'inline-block';
+                }
+            } else {
+                personEditBtn.textContent = 'edit';
+                // Hide all edit icons
+                document.querySelectorAll('.field-edit-icon').forEach(function(btn) {
+                    btn.style.display = 'none';
+                });
+                // Hide all edit forms
+                document.querySelectorAll('.field-edit').forEach(function(div) {
+                    div.style.display = 'none';
+                });
+                // Show all displays
+                document.querySelectorAll('.field-display').forEach(function(span) {
+                    span.style.display = 'inline';
+                });
+                // Hide notes edit button
+                var notesEditIconBtn = document.getElementById('person-notes-edit-icon-btn');
+                if (notesEditIconBtn) {
+                    notesEditIconBtn.style.display = 'none';
+                }
+            }
+        });
+    }
+    
+    // Handle field edit icon clicks
+    document.querySelectorAll('.field-edit-icon').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var fieldName = this.getAttribute('data-field');
+            var display = document.getElementById(fieldName + '-display');
+            var edit = document.getElementById(fieldName + '-edit');
+            
+            if (display && edit) {
+                display.style.display = 'none';
+                edit.style.display = 'inline-block';
+                this.style.display = 'none';
+                
+                // Focus on input
+                var input = document.getElementById(fieldName + '-input');
+                if (input) input.focus();
+            }
+        });
+    });
+    
+    // Handle field save buttons
+    document.querySelectorAll('.field-save-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var fieldName = this.getAttribute('data-field');
+            var input = document.getElementById(fieldName + '-input');
+            var display = document.getElementById(fieldName + '-display');
+            var edit = document.getElementById(fieldName + '-edit');
+            
+            if (input && display && edit) {
+                var value = input.value.trim();
+                
+                // Save via AJAX
+                var formData = new FormData();
+                formData.append('quick_update', 'update_field');
+                formData.append('field_name', fieldName);
+                formData.append('field_value', value);
+                formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+                
+                fetch('{% url "person_detail" person_id=person_id %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        // Update display
+                        if (fieldName === 'email' && value) {
+                            display.innerHTML = '<a href=\"mailto:' + value + '\">' + value + '</a>';
+                        } else if (fieldName === 'phone' && value) {
+                            display.innerHTML = '<a href=\"tel:' + value + '\">' + value + '</a>';
+                        } else if (value) {
+                            display.textContent = value;
+                        } else {
+                            display.innerHTML = '<span class=\"empty-field\">Not set</span>';
+                        }
+                        
+                        // Switch back to view mode
+                        edit.style.display = 'none';
+                        display.style.display = 'inline';
+                        if (editMode) {
+                            var editIcon = document.querySelector('.field-edit-icon[data-field=\"' + fieldName + '\"]');
+                            if (editIcon) editIcon.style.display = 'inline-block';
+                        }
+                    } else {
+                        alert('Error saving field');
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error saving field:', err);
+                    alert('Error saving field');
+                });
+            }
+        });
+    });
+    
+    // Handle field cancel buttons
+    document.querySelectorAll('.field-cancel-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var fieldName = this.getAttribute('data-field');
+            var display = document.getElementById(fieldName + '-display');
+            var edit = document.getElementById(fieldName + '-edit');
+            
+            if (display && edit) {
+                edit.style.display = 'none';
+                display.style.display = 'inline';
+                if (editMode) {
+                    var editIcon = document.querySelector('.field-edit-icon[data-field=\"' + fieldName + '\"]');
+                    if (editIcon) editIcon.style.display = 'inline-block';
+                }
+            }
+        });
+    });
+    
+    // Person notes inline editing
+    var personNotesEditIconBtn = document.getElementById('person-notes-edit-icon-btn');
+    var personNotesDisplay = document.getElementById('person-notes-display');
+    var personNotesEditorContainer = document.getElementById('person-notes-editor-container');
+    var personNotesEditor = document.getElementById('person-notes-editor');
+    var personNotesSaveBtn = document.getElementById('person-notes-save-btn');
+    var personNotesCancelBtn = document.getElementById('person-notes-cancel-btn');
+    var personNotesMDE = null;
+    var personNotesOriginalContent = personNotesEditor ? personNotesEditor.value : '';
+    
+    function initializePersonNotesEditor() {
+        if (!personNotesMDE && personNotesEditor) {
+            personNotesMDE = new EasyMDE({
+                element: personNotesEditor,
+                spellChecker: false,
+                toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', 'code', 'table', '|', 'preview', 'side-by-side', 'fullscreen', '|', 'guide'],
+                minHeight: '300px',
+                placeholder: 'Enter notes about this person... (Markdown supported)',
+                status: false,
+                autosave: {
+                    enabled: false
+                }
+            });
+        }
+    }
+    
+    if (personNotesEditIconBtn) {
+        personNotesEditIconBtn.addEventListener('click', function() {
+            // Hide display
+            personNotesDisplay.style.display = 'none';
+            personNotesEditIconBtn.style.display = 'none';
+            
+            // Show editor container
+            personNotesEditorContainer.style.display = 'block';
+            
+            // Initialize or reset editor
+            initializePersonNotesEditor();
+            if (personNotesMDE) {
+                personNotesMDE.value(personNotesOriginalContent);
+            }
+        });
+    }
+    
+    if (personNotesSaveBtn) {
+        personNotesSaveBtn.addEventListener('click', function() {
+            var content = personNotesMDE ? personNotesMDE.value() : personNotesEditor.value;
+            var formData = new FormData();
+            formData.append('quick_update', 'content');
+            formData.append('content', content);
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+            
+            fetch('{% url "person_detail" person_id=person_id %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Update display with rendered markdown
+                    personNotesDisplay.innerHTML = data.content || '<span style=\"color: #828282;\">No notes yet. Click edit to add notes.</span>';
+                    personNotesOriginalContent = content;
+                    
+                    // Switch back to view mode
+                    personNotesEditorContainer.style.display = 'none';
+                    personNotesDisplay.style.display = 'block';
+                    if (editMode && content) {
+                        personNotesEditIconBtn.style.display = 'inline-block';
+                    }
+                } else {
+                    alert('Error saving notes');
+                }
+            })
+            .catch(function(err) {
+                console.error('Error saving notes:', err);
+                alert('Error saving notes');
+            });
+        });
+    }
+    
+    if (personNotesCancelBtn) {
+        personNotesCancelBtn.addEventListener('click', function() {
+            // Restore original content
+            if (personNotesMDE) {
+                personNotesMDE.value(personNotesOriginalContent);
+            } else {
+                personNotesEditor.value = personNotesOriginalContent;
+            }
+            
+            // Switch back to view mode
+            personNotesEditorContainer.style.display = 'none';
+            personNotesDisplay.style.display = 'block';
+            if (editMode && personNotesOriginalContent) {
+                personNotesEditIconBtn.style.display = 'inline-block';
+            }
+        });
+    }
+</script>
 {% endblock %}

@@ -310,33 +310,33 @@ def load_person(person_id, metadata_only=False):
     
     try:
         person = Person.objects.get(id=person_id)
-        # Build metadata from Person model
+        # Build metadata from Person model fields
         metadata = {
             'id': person.id,
             'name': person.name,
+            'display_name': person.display_name or '',
+            'email': person.email or '',
+            'phone': person.phone or '',
+            'job_title': person.job_title or '',
+            'company': person.company or '',
+            'created': person.created.isoformat() if person.created else '',
+            'updated': person.updated.isoformat() if person.updated else '',
+            'notes': person.notes or [],
         }
-        if person.display_name:
-            metadata['display_name'] = person.display_name
-        if person.email:
-            metadata['email'] = person.email
         
-        # Merge with metadata_json if it exists (for backward compatibility)
+        # Merge with metadata_json if it exists (for backward compatibility with old data)
         if person.metadata_json:
             try:
                 json_metadata = json.loads(person.metadata_json)
-                metadata.update(json_metadata)
+                # Only merge fields that aren't already set from model fields
+                for key, value in json_metadata.items():
+                    if key not in metadata or not metadata[key]:
+                        metadata[key] = value
             except (json.JSONDecodeError, TypeError):
                 pass
         
-        # For content, we still need to check Entity table for backward compatibility
-        # In the future, we can add a content field to Person model
-        content = None
-        if not metadata_only:
-            try:
-                entity = Entity.objects.get(id=person_id, type='person')
-                content = entity.content
-            except Entity.DoesNotExist:
-                content = ''
+        # Get content from Person model (ad-hoc notes)
+        content = person.content if not metadata_only else None
         
         return metadata, content
     except Person.DoesNotExist:
@@ -355,13 +355,18 @@ def save_person(person_id, metadata, content=''):
     if 'status' not in metadata:
         metadata['status'] = 'active'
 
-    # Update or create Person record
+    # Update or create Person record with proper field mapping
     person, created = Person.objects.update_or_create(
         id=person_id,
         defaults={
             'name': metadata.get('name', '').strip().lstrip('@'),
             'display_name': metadata.get('display_name', ''),
             'email': metadata.get('email', ''),
+            'phone': metadata.get('phone', ''),
+            'job_title': metadata.get('job_title', ''),
+            'company': metadata.get('company', ''),
+            'notes': metadata.get('notes', []),
+            'content': content or '',
             'metadata_json': json.dumps(metadata),  # Keep for backward compatibility
         }
     )
@@ -4600,6 +4605,36 @@ def person_detail(request, person_id):
     person_metadata, person_content = load_person(person_id)
     if person_metadata is None:
         raise Http404("Person not found")
+    
+    # Handle POST requests for editing person details
+    if request.method == 'POST':
+        quick_update = request.POST.get('quick_update', '')
+        
+        # Handle inline field updates
+        if quick_update == 'update_field':
+            field_name = request.POST.get('field_name', '')
+            field_value = request.POST.get('field_value', '')
+            
+            if field_name in ['display_name', 'email', 'phone', 'job_title', 'company']:
+                person_metadata[field_name] = field_value
+                save_person(person_id, person_metadata, person_content)
+                
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return JsonResponse({'success': True})
+                return redirect('person_detail', person_id=person_id)
+        
+        # Handle content (notes) updates
+        elif quick_update == 'content':
+            new_content = request.POST.get('content', '')
+            person_content = new_content
+            save_person(person_id, person_metadata, person_content)
+            
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                # Render the markdown content
+                from pm.templatetags.markdown_extras import markdownify
+                rendered_content = markdownify(new_content) if new_content else ''
+                return JsonResponse({'success': True, 'content': rendered_content})
+            return redirect('person_detail', person_id=person_id)
     
     # Find all references
     references = find_person_references(person_id)
