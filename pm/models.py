@@ -164,7 +164,7 @@ class Task(BaseEntity):
     epic = models.ForeignKey(Epic, on_delete=models.CASCADE, related_name='tasks', null=True, blank=True)
     
     # Task-specific fields
-    dependencies = models.JSONField(default=list, blank=True)  # Array of task IDs
+    dependencies = models.JSONField(default=dict, blank=True)  # Dict with blocks/blocked_by lists
     checklist = models.JSONField(default=list, blank=True)  # Checklist items
     notes = models.JSONField(default=list, blank=True)  # Array of note IDs
     
@@ -186,6 +186,7 @@ class Subtask(BaseEntity):
     epic = models.ForeignKey(Epic, on_delete=models.CASCADE, related_name='subtasks', null=True, blank=True)
     
     # Subtask-specific fields
+    dependencies = models.JSONField(default=dict, blank=True)  # Dict with blocks/blocked_by lists
     checklist = models.JSONField(default=list, blank=True)  # Checklist items
     notes = models.JSONField(default=list, blank=True)  # Array of note IDs
     

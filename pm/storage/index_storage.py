@@ -257,6 +257,7 @@ class IndexStorage:
                         'project_id': project_id,
                         'task_id': task_id,
                         'epic_id': metadata.get('epic_id') or None,
+                        'dependencies': metadata.get('dependencies', {}),
                         'checklist': metadata.get('checklist', []),
                         'notes': metadata.get('notes', []),
                     })
@@ -434,10 +435,28 @@ class IndexStorage:
     
     def get_entity(self, entity_id):
         """Get entity from index."""
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT entity_type FROM search_index WHERE entity_id = %s LIMIT 1", [entity_id])
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        entity_type = row[0]
+        models = {
+            'project': Project,
+            'epic': Epic,
+            'task': Task,
+            'subtask': Subtask,
+            'note': Note
+        }
+        model = models.get(entity_type)
+        if not model:
+            return None
+
         try:
-            result = Entity.objects.get(id=entity_id)
-            return result
-        except Entity.DoesNotExist:
+            return model.objects.get(id=entity_id)
+        except model.DoesNotExist:
             return None
     
     
@@ -465,18 +484,16 @@ class IndexStorage:
                 
                 for row in cursor.fetchall():
                     entity_id = row[0]
-                    try:
-                        entity = Entity.objects.get(id=entity_id)
+                    entity_obj = self.get_entity(entity_id)
+                    if entity_obj:
                         results.append({
-                            'entity': entity,
+                            'entity': entity_obj,
                             'title_match': row[1] or '',
                             'content_match': row[2] or '',
                             'updates_match': row[3] or '',
                             'people_match': row[4] or '',
                             'labels_match': row[5] or '',
                         })
-                    except Entity.DoesNotExist:
-                        continue
         except Exception as e:
             logger.error(f"FTS5 search error: {e}")
             return []
@@ -485,32 +502,86 @@ class IndexStorage:
     
     def query_entities(self, entity_type=None, status=None, project_id=None, 
                       epic_id=None, due_date_start=None, due_date_end=None):
-        """Query entities with filters."""
-        qs = Entity.objects.all()
+        """Query entities with filters - now works with specialized models."""
+        all_results = []
         
-        if entity_type:
-            qs = qs.filter(type=entity_type)
-        if status:
-            # Try to use status_fk first, fall back to old status field
-            try:
-                status_obj = Status.objects.filter(name=status, is_active=True).first()
-                if status_obj:
-                    qs = qs.filter(status_fk=status_obj)
-                else:
-                    qs = qs.filter(status=status)  # Fallback to old field
-            except Exception:
-                qs = qs.filter(status=status)  # Fallback to old field
-        if project_id:
-            qs = qs.filter(project_id=project_id)
-        if epic_id:
-            qs = qs.filter(epic_id=epic_id)
-        if due_date_start:
-            # Try new date field first, fall back to old string field
-            qs = qs.filter(Q(due_date_dt__gte=due_date_start) | Q(due_date__gte=due_date_start))
-        if due_date_end:
-            qs = qs.filter(Q(due_date_dt__lte=due_date_end) | Q(due_date__lte=due_date_end))
+        # Query based on entity type
+        if entity_type in [None, 'project']:
+            qs = Project.objects.all()
+            if status:
+                try:
+                    status_obj = Status.objects.filter(name=status, is_active=True).first()
+                    if status_obj:
+                        qs = qs.filter(status_fk=status_obj)
+                except:
+                    pass
+            if project_id:
+                qs = qs.filter(id=project_id)
+            all_results.extend(qs)
         
-        return qs
+        if entity_type in [None, 'epic']:
+            qs = Epic.objects.all()
+            if status:
+                try:
+                    status_obj = Status.objects.filter(name=status, is_active=True).first()
+                    if status_obj:
+                        qs = qs.filter(status_fk=status_obj)
+                except:
+                    pass
+            if project_id:
+                qs = qs.filter(project_id=project_id)
+            all_results.extend(qs)
+        
+        if entity_type in [None, 'task']:
+            qs = Task.objects.all()
+            if status:
+                try:
+                    status_obj = Status.objects.filter(name=status, is_active=True).first()
+                    if status_obj:
+                        qs = qs.filter(status_fk=status_obj)
+                except:
+                    pass
+            if project_id:
+                qs = qs.filter(project_id=project_id)
+            if epic_id:
+                qs = qs.filter(epic_id=epic_id)
+            if due_date_start:
+                qs = qs.filter(due_date_dt__gte=due_date_start)
+            if due_date_end:
+                qs = qs.filter(due_date_dt__lte=due_date_end)
+            all_results.extend(qs)
+        
+        if entity_type in [None, 'subtask']:
+            qs = Subtask.objects.all()
+            if status:
+                try:
+                    status_obj = Status.objects.filter(name=status, is_active=True).first()
+                    if status_obj:
+                        qs = qs.filter(status_fk=status_obj)
+                except:
+                    pass
+            if project_id:
+                qs = qs.filter(project_id=project_id)
+            if epic_id:
+                qs = qs.filter(epic_id=epic_id)
+            if due_date_start:
+                qs = qs.filter(due_date_dt__gte=due_date_start)
+            if due_date_end:
+                qs = qs.filter(due_date_dt__lte=due_date_end)
+            all_results.extend(qs)
+        
+        if entity_type in [None, 'note']:
+            qs = Note.objects.all()
+            if status:
+                try:
+                    status_obj = Status.objects.filter(name=status, is_active=True).first()
+                    if status_obj:
+                        qs = qs.filter(status_fk=status_obj)
+                except:
+                    pass
+            all_results.extend(qs)
+        
+        return all_results
     
     def delete_entity(self, entity_id):
         """Delete entity from index and related data.
