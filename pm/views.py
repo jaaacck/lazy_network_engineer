@@ -351,6 +351,10 @@ def save_person(person_id, metadata, content=''):
     # Ensure person_id is in metadata
     metadata['id'] = person_id
     
+    # Ensure notes have a default "Active" status for database compatibility
+    if 'status' not in metadata:
+        metadata['status'] = 'active'
+
     # Update or create Person record
     person, created = Person.objects.update_or_create(
         id=person_id,
