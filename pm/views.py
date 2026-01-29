@@ -795,6 +795,56 @@ def _flatten_dependencies(dependencies):
     return []
 
 
+def _block_open_subtasks(project_id, task_id, epic_id=None):
+    """Mark all open subtasks under a task as blocked."""
+    subtask_qs = Subtask.objects.select_related('status_fk').filter(
+        project_id=project_id,
+        task_id=task_id
+    )
+    if epic_id:
+        subtask_qs = subtask_qs.filter(epic_id=epic_id)
+    else:
+        subtask_qs = subtask_qs.filter(epic__isnull=True)
+
+    for subtask_entity in subtask_qs:
+        sub_status = subtask_entity.status_fk.name if subtask_entity.status_fk else ''
+        if sub_status in ['done', 'cancelled', 'closed']:
+            continue
+
+        sub_meta, sub_content = load_subtask(project_id, task_id, subtask_entity.id, epic_id=epic_id)
+        if sub_meta is None:
+            continue
+        if sub_meta.get('status') == 'blocked':
+            continue
+        sub_meta['status'] = 'blocked'
+        save_subtask(project_id, task_id, subtask_entity.id, sub_meta, sub_content, epic_id=epic_id)
+
+
+def _unblock_open_subtasks(project_id, task_id, epic_id=None):
+    """Unblock subtasks under a task when the task is unblocked."""
+    subtask_qs = Subtask.objects.select_related('status_fk').filter(
+        project_id=project_id,
+        task_id=task_id
+    )
+    if epic_id:
+        subtask_qs = subtask_qs.filter(epic_id=epic_id)
+    else:
+        subtask_qs = subtask_qs.filter(epic__isnull=True)
+
+    for subtask_entity in subtask_qs:
+        sub_status = subtask_entity.status_fk.name if subtask_entity.status_fk else ''
+        if sub_status in ['done', 'cancelled', 'closed']:
+            continue
+
+        sub_meta, sub_content = load_subtask(project_id, task_id, subtask_entity.id, epic_id=epic_id)
+        if sub_meta is None:
+            continue
+        if sub_meta.get('status') != 'blocked':
+            continue
+        sub_meta['status'] = 'todo'
+        save_subtask(project_id, task_id, subtask_entity.id, sub_meta, sub_content, epic_id=epic_id)
+
+
 
 def load_project(project_id, metadata_only=False):
     """Load a project from database."""
@@ -2057,6 +2107,9 @@ def _task_detail_impl(request, project, task, epic=None):
                 metadata['blocked_by'] = []
             if blocked_by_id not in metadata['blocked_by']:
                 metadata['blocked_by'].append(blocked_by_id)
+                if metadata.get('status') != 'blocked':
+                    metadata['status'] = 'blocked'
+                    _block_open_subtasks(project, task, epic_id=epic)
                 # Get task title for activity
                 available_tasks = get_project_tasks_for_dependencies(project, exclude_task_id=task)
                 task_title = next((t['title'] for t in available_tasks if t['id'] == blocked_by_id), blocked_by_id)
@@ -2074,6 +2127,9 @@ def _task_detail_impl(request, project, task, epic=None):
             task_title = next((t['title'] for t in available_tasks if t['id'] == blocked_by_id), blocked_by_id)
             metadata['blocked_by'] = [b for b in metadata['blocked_by'] if b != blocked_by_id]
             add_activity_entry(metadata, 'dependency_removed', f"blocked by {task_title}", None)
+            if not metadata['blocked_by'] and metadata.get('status') == 'blocked':
+                metadata['status'] = 'todo'
+                _unblock_open_subtasks(project, task, epic_id=epic)
             # Update reciprocal: remove blocks from target
             update_reciprocal_dependency(project, task, blocked_by_id, 'blocked_by', 'remove')
             save_task(project, task, metadata, content, epic_id=epic)
@@ -2623,6 +2679,8 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
                 metadata['blocked_by'] = []
             if blocked_by_id not in metadata['blocked_by']:
                 metadata['blocked_by'].append(blocked_by_id)
+                if metadata.get('status') != 'blocked':
+                    metadata['status'] = 'blocked'
                 # Get task title for activity
                 available_tasks = get_project_tasks_for_dependencies(project, exclude_task_id=subtask)
                 task_title = next((t['title'] for t in available_tasks if t['id'] == blocked_by_id), blocked_by_id)
@@ -3230,8 +3288,14 @@ def update_reciprocal_dependency(project_id, source_id, target_id, relationship,
         if action == 'add':
             if source_id not in metadata[reciprocal]:
                 metadata[reciprocal].append(source_id)
+            if reciprocal == 'blocked_by' and metadata.get('status') != 'blocked':
+                metadata['status'] = 'blocked'
+                _block_open_subtasks(project_id, target_info['task_id'], epic_id=target_info.get('epic_id'))
         elif action == 'remove':
             metadata[reciprocal] = [x for x in metadata[reciprocal] if x != source_id]
+            if reciprocal == 'blocked_by' and not metadata[reciprocal] and metadata.get('status') == 'blocked':
+                metadata['status'] = 'todo'
+                _unblock_open_subtasks(project_id, target_info['task_id'], epic_id=target_info.get('epic_id'))
         
         save_task(project_id, target_info['task_id'], metadata, content, epic_id=target_info.get('epic_id'))
     
@@ -3247,6 +3311,8 @@ def update_reciprocal_dependency(project_id, source_id, target_id, relationship,
         if action == 'add':
             if source_id not in metadata[reciprocal]:
                 metadata[reciprocal].append(source_id)
+            if reciprocal == 'blocked_by' and metadata.get('status') != 'blocked':
+                metadata['status'] = 'blocked'
         elif action == 'remove':
             metadata[reciprocal] = [x for x in metadata[reciprocal] if x != source_id]
         
@@ -3766,8 +3832,13 @@ def update_task_status(request):
             meta, content = load_task(project_id, task_id, epic_id=epic_id)
             if meta is None:
                 return JsonResponse({'error': 'Task not found'}, status=404)
+            previous_status = meta.get('status')
             meta['status'] = status
             save_task(project_id, task_id, meta, content, epic_id=epic_id)
+            if status == 'blocked':
+                _block_open_subtasks(project_id, task_id, epic_id=epic_id)
+            elif previous_status == 'blocked':
+                _unblock_open_subtasks(project_id, task_id, epic_id=epic_id)
         elif item_type == 'subtask':
             if not task_id or not validate_id(task_id, 'task') or not validate_id(subtask_id, 'subtask'):
                 return JsonResponse({'error': 'Invalid IDs'}, status=400)
