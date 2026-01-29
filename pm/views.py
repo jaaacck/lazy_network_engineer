@@ -4057,6 +4057,7 @@ def my_work(request):
     open_items = []
     in_progress = []
     on_hold_items = []
+    blocked_items = []
     due_soon = []
     overdue = []
 
@@ -4073,17 +4074,19 @@ def my_work(request):
         if due_filter == 'none' and due:
             continue
 
-        if status not in ['done', 'blocked', 'cancelled', 'on_hold']:
+        if status == 'todo':
             open_items.append(item)
-        if status == 'in_progress':
+        if status in ['in_progress', 'next']:
             in_progress.append(item)
         if status == 'on_hold':
             on_hold_items.append(item)
+        if status == 'blocked':
+            blocked_items.append(item)
 
         if due:
-            if due < today and status != 'done':
+            if due < today and status not in ['done', 'blocked', 'cancelled', 'on_hold']:
                 overdue.append(item)
-            elif today <= due <= due_soon_cutoff and status != 'done':
+            elif today <= due <= due_soon_cutoff and status not in ['done', 'blocked', 'cancelled', 'on_hold']:
                 due_soon.append(item)
 
     # Default sort by priority (lower number = higher priority)
@@ -4093,6 +4096,7 @@ def my_work(request):
     open_items = sort_by_priority(open_items)
     in_progress = sort_by_priority(in_progress)
     on_hold_items = sort_by_priority(on_hold_items)
+    blocked_items = sort_by_priority(blocked_items)
     due_soon = sort_by_priority(due_soon)
     overdue = sort_by_priority(overdue)
 
@@ -4102,6 +4106,7 @@ def my_work(request):
         'on_hold_items': on_hold_items,
         'due_soon': due_soon,
         'overdue': overdue,
+        'blocked_items': blocked_items,
         'projects': projects,
         'filters': {
             'status': status_filter,
