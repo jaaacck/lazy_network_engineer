@@ -156,9 +156,9 @@
             <thead>
             <tr>
                 <th class="col-checkbox"><input type="checkbox" id="select-all-direct-tasks" title="Select all"></th>
+                <th class="sortable" data-sort="title">Task <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="status">Status <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="priority">Priority <span class="sort-indicator">↕</span></th>
-                <th class="sortable" data-sort="title">Task <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="created">Created <span class="sort-indicator">↕</span></th>
                 <th class="sortable" data-sort="due_date">Due Date <span class="sort-indicator">↕</span></th>
             </tr>
@@ -172,9 +172,9 @@
                 data-created="{{ task.created|default:'9999-99-99' }}" 
                 data-due-date="{{ task.due_date|default:'9999-99-99' }}">
                 <td class="col-checkbox"><input type="checkbox" class="task-checkbox" value="{{ task.id }}"></td>
+                <td>{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}<a href="{% url 'task_detail_no_epic' project=project task=task.id %}">{{ task.title }}</a></td>
                 <td><span class="badge badge-status status-{{ task.status }}">{{ task.status_display|default:task.status }}</span></td>
                 <td>{% if task.priority %}<span class="badge badge-priority priority-{{ task.priority }}">P{{ task.priority }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-                <td>{% if task.seq_id %}<span class="seq-id">{{ task.seq_id }}</span>{% endif %}<a href="{% url 'task_detail_no_epic' project=project task=task.id %}">{{ task.title }}</a></td>
                 <td>{% if task.created %}{{ task.created }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                 <td>{% if task.due_date %}{{ task.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
             </tr>
