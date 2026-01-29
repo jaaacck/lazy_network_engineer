@@ -1166,9 +1166,9 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="move-target-epic">Epic</label>
-                    <select name="target_epic" id="move-target-epic" required disabled>
-                        <option value="">Select Epic...</option>
+                    <label for="move-target-epic">Epic (optional)</label>
+                    <select name="target_epic" id="move-target-epic" disabled>
+                        <option value="">None (Direct Task)</option>
                     </select>
                 </div>
                 <div class="form-actions">
@@ -1245,8 +1245,8 @@ if (moveTaskButton && moveTaskModal) {
             var selectedOption = this.options[this.selectedIndex];
             var epics = selectedOption.dataset.epics ? JSON.parse(selectedOption.dataset.epics) : [];
             
-            moveTargetEpic.innerHTML = '<option value="">Select Epic...</option>';
-            moveTargetEpic.disabled = !epics.length;
+            moveTargetEpic.innerHTML = '<option value="">None (Direct Task)</option>';
+            moveTargetEpic.disabled = false;
             
             epics.forEach(function(epic) {
                 var option = document.createElement('option');

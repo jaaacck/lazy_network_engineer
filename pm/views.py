@@ -850,9 +850,8 @@ def load_task(project_id, task_id, epic_id=None, metadata_only=False):
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
-            # Match both NULL and empty string epic_ids (tasks without an epic)
-            from django.db.models import Q
-            query = query.filter(Q(epic_id__isnull=True) | Q(epic_id=''))
+            # Match NULL epic_id (tasks without an epic)
+            query = query.filter(epic_id__isnull=True)
         
         entity = query.get()
         # Build metadata from Entity fields
@@ -930,9 +929,8 @@ def load_subtask(project_id, task_id, subtask_id, epic_id=None, metadata_only=Fa
         if epic_id:
             query = query.filter(epic_id=epic_id)
         else:
-            # Match both NULL and empty string epic_ids (subtasks without an epic)
-            from django.db.models import Q
-            query = query.filter(Q(epic_id__isnull=True) | Q(epic_id=''))
+            # Match NULL epic_id (subtasks without an epic)
+            query = query.filter(epic_id__isnull=True)
         
         entity = query.get()
         # Build metadata from Entity fields

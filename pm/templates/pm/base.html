@@ -16,7 +16,7 @@
             <span class="logo"><a href="{% url 'project_list' %}">LNE</a></span>
             <nav class="nav">
                 <a href="{% url 'project_list' %}">projects</a>
-                <a href="{% url 'inbox' %}">inbox</a>
+                <a href="{% url 'project_detail' project='project-inbox' %}">inbox</a>
                 <a href="{% url 'my_work' %}">my work</a>
                 <a href="{% url 'today' %}">today</a>
                 <a href="{% url 'calendar' %}">calendar</a>
