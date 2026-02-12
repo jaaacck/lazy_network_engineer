@@ -24,14 +24,11 @@
             <label for="bulk-status" style="margin: 0; color: #666;">Status:</label>
             <select name="status" id="bulk-status" style="font-family: Verdana, Geneva, sans-serif; font-size: 9pt; padding: 3px 6px; border: 1px solid #ddd; background: #fff;">
                 <option value="">— No change —</option>
-                <option value="todo">Todo</option>
-                <option value="in_progress">In Progress</option>
-                <option value="next">Next</option>
-                <option value="on_hold">On Hold</option>
-                <option value="done">Done</option>
-                <option value="blocked">Blocked</option>
-                <option value="cancelled">Cancelled</option>
+                {% for status in bulk_statuses %}
+                <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
+            <input type="text" name="pending_reason" id="bulk-pending-reason" placeholder="Reason..." style="display: none; font-family: Verdana, Geneva, sans-serif; font-size: 9pt; padding: 3px 6px; border: 1px solid #ddd; background: #fff; width: 180px;">
         </div>
         
         <div style="display: flex; gap: 6px; align-items: center;">
@@ -231,6 +228,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectionCount = document.getElementById('selection-count');
     const bulkClearDueDate = document.getElementById('bulk-clear-due-date');
     const bulkCancelBtn = document.getElementById('bulk-cancel');
+    const bulkStatus = form.querySelector('[name="status"]');
+    const bulkPendingReason = document.getElementById('bulk-pending-reason');
     
     const itemCheckboxes = document.querySelectorAll('input.item-checkbox');
     const selectAllCheckboxes = document.querySelectorAll('input.select-all-checkbox');
@@ -264,6 +263,17 @@ document.addEventListener('DOMContentLoaded', function() {
     bulkClearDueDate.addEventListener('click', function() {
         form.querySelector('[name="due_date"]').value = '';
     });
+
+    function togglePendingReason() {
+        const needsReason = bulkStatus.value === 'on_hold' || bulkStatus.value === 'blocked';
+        bulkPendingReason.style.display = needsReason ? 'inline-block' : 'none';
+        if (!needsReason) {
+            bulkPendingReason.value = '';
+        }
+    }
+
+    bulkStatus.addEventListener('change', togglePendingReason);
+    togglePendingReason();
     
     bulkCancelBtn.addEventListener('click', function() {
         itemCheckboxes.forEach(checkbox => checkbox.checked = false);
@@ -271,6 +281,8 @@ document.addEventListener('DOMContentLoaded', function() {
         form.querySelector('[name="status"]').value = '';
         form.querySelector('[name="priority"]').value = '';
         form.querySelector('[name="due_date"]').value = '';
+        bulkPendingReason.value = '';
+        togglePendingReason();
         updateToolbar();
     });
     
@@ -285,10 +297,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const status = form.querySelector('[name="status"]').value;
         const priority = form.querySelector('[name="priority"]').value;
         const dueDate = form.querySelector('[name="due_date"]').value;
+        const pendingReason = form.querySelector('[name="pending_reason"]').value.trim();
         
         if (!status && !priority && !dueDate) {
             e.preventDefault();
             alert('Please select at least one field to update');
+            return;
+        }
+
+        if ((status === 'on_hold' || status === 'blocked') && !pendingReason) {
+            e.preventDefault();
+            alert('Please provide a reason for On Hold/Blocked');
             return;
         }
         

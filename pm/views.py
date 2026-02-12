@@ -718,6 +718,22 @@ def get_status_for_entity_type(entity_type):
     return statuses
 
 
+def status_requires_reason(status_name, entity_type=None):
+    """Return True if the status requires a pending reason."""
+    from django.db.models import Q
+    if not status_name:
+        return False
+    try:
+        query = Status.objects.filter(name=status_name, is_active=True, pending_reason=True)
+        if entity_type:
+            query = query.filter(
+                Q(entity_types__contains=entity_type) | Q(entity_types__contains='all')
+            )
+        return query.exists()
+    except Exception:
+        return False
+
+
 def _build_metadata_from_entity(entity):
     """Build metadata dict from Entity database fields."""
     
@@ -741,6 +757,7 @@ def _build_metadata_from_entity(entity):
         'priority': entity.priority,
         'created': entity.created or '',
         'updated': entity.updated or '',
+        'pending_reason': getattr(entity, 'pending_reason', '') or '',
         'due_date': entity.due_date_dt.isoformat() if entity.due_date_dt else '',
         'schedule_start': entity.schedule_start_dt.isoformat() if entity.schedule_start_dt else '',
         'schedule_end': entity.schedule_end_dt.isoformat() if entity.schedule_end_dt else '',
@@ -756,7 +773,7 @@ def _build_metadata_from_entity(entity):
         'color': getattr(entity, 'color', '') or '',
         'stats_version': getattr(entity, 'stats_version', None),
         'stats_updated': entity.stats_updated.isoformat() if hasattr(entity, 'stats_updated') and entity.stats_updated else '',
-        'updates': [{'timestamp': u.timestamp, 'content': u.content} 
+        'updates': [{'timestamp': u.timestamp, 'content': u.content, 'type': u.type, 'activity_type': u.activity_type} 
                    for u in Update.objects.filter(entity_id=entity.id).order_by('timestamp')],
     }
 
@@ -817,7 +834,9 @@ def _block_open_subtasks(project_id, task_id, epic_id=None):
             continue
         if sub_meta.get('status') == 'blocked':
             continue
+        old_status = sub_meta.get('status', 'todo')
         sub_meta['status'] = 'blocked'
+        add_activity_entry(sub_meta, 'status_changed', old_status, 'blocked')
         save_subtask(project_id, task_id, subtask_entity.id, sub_meta, sub_content, epic_id=epic_id)
 
 
@@ -843,6 +862,7 @@ def _unblock_open_subtasks(project_id, task_id, epic_id=None):
         if sub_meta.get('status') != 'blocked':
             continue
         sub_meta['status'] = 'todo'
+        add_activity_entry(sub_meta, 'status_changed', 'blocked', 'todo')
         save_subtask(project_id, task_id, subtask_entity.id, sub_meta, sub_content, epic_id=epic_id)
 
 
@@ -1297,6 +1317,7 @@ def new_project(request):
         title = request.POST.get('title', 'New Project')
         status = request.POST.get('status', 'active')
         priority = request.POST.get('priority', '').strip()
+        pending_reason = request.POST.get('pending_reason', '').strip()
         content = request.POST.get('content', '')
 
         project_id = f'project-{uuid.uuid4().hex[:8]}'
@@ -1309,6 +1330,8 @@ def new_project(request):
             'created': datetime.now().strftime('%Y-%m-%d'),
             'color': color
         }
+        if status_requires_reason(status, 'project') and pending_reason:
+            metadata['pending_reason'] = pending_reason
         if priority:
             metadata['priority'] = priority
 
@@ -1327,7 +1350,9 @@ def new_project(request):
 
         return redirect('project_detail', project=project_id)
 
-    return render(request, 'pm/new_project.html')
+    return render(request, 'pm/new_project.html', {
+        'all_statuses': get_status_for_entity_type('project')
+    })
 
 
 def project_detail(request, project):
@@ -1347,9 +1372,19 @@ def project_detail(request, project):
         if quick_update == 'status':
             old_status = metadata.get('status', 'active')
             new_status = request.POST.get('status', old_status)
-            if old_status != new_status:
+            new_reason = request.POST.get('pending_reason', '').strip()
+            old_reason = metadata.get('pending_reason', '')
+            status_changed = old_status != new_status
+            reason_changed = old_reason != new_reason
+            if status_requires_reason(new_status, 'project'):
+                metadata['pending_reason'] = new_reason
+            else:
+                metadata.pop('pending_reason', None)
+                new_reason = ''
+            if status_changed:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
+            if status_changed or reason_changed:
                 save_project(project, metadata, content)
             return redirect('project_detail', project=project)
         elif quick_update == 'description':
@@ -1536,7 +1571,9 @@ def project_detail(request, project):
         'markdown_total': markdown_total,
         'checklist_progress': checklist_progress,
         'checklist_total': checklist_total,
-        'all_statuses': get_status_for_entity_type('project')
+        'all_statuses': get_status_for_entity_type('project'),
+        'epic_statuses': get_status_for_entity_type('epic'),
+        'task_statuses': get_status_for_entity_type('task')
     })
 
 
@@ -1545,6 +1582,7 @@ def new_epic(request, project):
     if request.method == 'POST':
         title = request.POST.get('title', 'New Epic')
         status = request.POST.get('status', 'active')
+        pending_reason = request.POST.get('pending_reason', '').strip()
         content = request.POST.get('content', '')
 
         epic_id = f'epic-{uuid.uuid4().hex[:8]}'
@@ -1557,6 +1595,8 @@ def new_epic(request, project):
             'priority': priority,
             'created': datetime.now().strftime('%Y-%m-%d')
         }
+        if status_requires_reason(status, 'epic') and pending_reason:
+            metadata['pending_reason'] = pending_reason
 
         # Add creation activity
         add_activity_entry(metadata, 'created')
@@ -1582,7 +1622,8 @@ def new_epic(request, project):
 
     return render(request, 'pm/new_epic.html', {
         'project': project,
-        'project_title': project_title
+        'project_title': project_title,
+        'all_statuses': get_status_for_entity_type('epic')
     })
 
 
@@ -1647,9 +1688,19 @@ def epic_detail(request, project, epic):
         if quick_update == 'status':
             old_status = metadata.get('status', 'active')
             new_status = request.POST.get('status', old_status)
-            if old_status != new_status:
+            new_reason = request.POST.get('pending_reason', '').strip()
+            old_reason = metadata.get('pending_reason', '')
+            status_changed = old_status != new_status
+            reason_changed = old_reason != new_reason
+            if status_requires_reason(new_status, 'epic'):
+                metadata['pending_reason'] = new_reason
+            else:
+                metadata.pop('pending_reason', None)
+                new_reason = ''
+            if status_changed:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
+            if status_changed or reason_changed:
                 save_epic(project, epic, metadata, content)
             return redirect('epic_detail', project=project, epic=epic)
         elif quick_update == 'priority':
@@ -1867,6 +1918,7 @@ def new_task(request, project, epic=None):
     if request.method == 'POST':
         title = request.POST.get('title', 'New Task')
         status = request.POST.get('status', 'todo')
+        pending_reason = request.POST.get('pending_reason', '').strip()
         schedule_start = request.POST.get('schedule_start', '')
         schedule_end = request.POST.get('schedule_end', '')
         due_date = request.POST.get('due_date', '')
@@ -1886,6 +1938,8 @@ def new_task(request, project, epic=None):
             'due_date': due_date,
             'created': datetime.now().strftime('%Y-%m-%d')
         }
+        if status_requires_reason(status, 'task') and pending_reason:
+            metadata['pending_reason'] = pending_reason
         if labels:
             metadata['labels'] = labels
 
@@ -1928,7 +1982,8 @@ def new_task(request, project, epic=None):
         'project': project,
         'project_title': project_title,
         'epic': epic,
-        'epic_title': epic_title
+        'epic_title': epic_title,
+        'all_statuses': get_status_for_entity_type('task')
     })
 
 
@@ -2109,7 +2164,9 @@ def _task_detail_impl(request, project, task, epic=None):
             if blocked_by_id not in metadata['blocked_by']:
                 metadata['blocked_by'].append(blocked_by_id)
                 if metadata.get('status') != 'blocked':
+                    old_status = metadata.get('status', 'todo')
                     metadata['status'] = 'blocked'
+                    add_activity_entry(metadata, 'status_changed', old_status, 'blocked')
                     _block_open_subtasks(project, task, epic_id=epic)
                 # Get task title for activity
                 available_tasks = get_project_tasks_for_dependencies(project, exclude_task_id=task)
@@ -2130,6 +2187,7 @@ def _task_detail_impl(request, project, task, epic=None):
             add_activity_entry(metadata, 'dependency_removed', f"blocked by {task_title}", None)
             if not metadata['blocked_by'] and metadata.get('status') == 'blocked':
                 metadata['status'] = 'todo'
+                add_activity_entry(metadata, 'status_changed', 'blocked', 'todo')
                 _unblock_open_subtasks(project, task, epic_id=epic)
             # Update reciprocal: remove blocks from target
             update_reciprocal_dependency(project, task, blocked_by_id, 'blocked_by', 'remove')
@@ -2142,9 +2200,19 @@ def _task_detail_impl(request, project, task, epic=None):
         if quick_update == 'status':
             old_status = metadata.get('status', 'todo')
             new_status = request.POST.get('status', old_status)
-            if old_status != new_status:
+            new_reason = request.POST.get('pending_reason', '').strip()
+            old_reason = metadata.get('pending_reason', '')
+            status_changed = old_status != new_status
+            reason_changed = old_reason != new_reason
+            if status_requires_reason(new_status, 'task'):
+                metadata['pending_reason'] = new_reason
+            else:
+                metadata.pop('pending_reason', None)
+                new_reason = ''
+            if status_changed:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
+            if status_changed or reason_changed:
                 save_task(project, task, metadata, content, epic_id=epic)
             return get_task_redirect_url()
         elif quick_update == 'priority':
@@ -2300,7 +2368,11 @@ def _task_detail_impl(request, project, task, epic=None):
     if request.method == 'POST' and 'title' in request.POST:
         # Handle form submission for editing
         metadata['title'] = request.POST.get('title', metadata['title'])
-        metadata['status'] = request.POST.get('status', metadata['status'])
+        old_status = metadata.get('status', 'todo')
+        new_status = request.POST.get('status', old_status)
+        if old_status != new_status:
+            add_activity_entry(metadata, 'status_changed', old_status, new_status)
+        metadata['status'] = new_status
         metadata['schedule_start'] = request.POST.get('schedule_start', metadata.get('schedule_start', ''))
         metadata['schedule_end'] = request.POST.get('schedule_end', metadata.get('schedule_end', ''))
         metadata['due_date'] = request.POST.get('due_date', metadata.get('due_date', ''))
@@ -2479,6 +2551,7 @@ def _new_subtask_impl(request, project, task, epic=None):
     if request.method == 'POST':
         title = request.POST.get('title', 'New Subtask')
         status = request.POST.get('status', 'todo')
+        pending_reason = request.POST.get('pending_reason', '').strip()
         due_date = request.POST.get('due_date', '')
         labels = normalize_labels(request.POST.get('labels', ''))
         content = request.POST.get('content', '')
@@ -2494,6 +2567,8 @@ def _new_subtask_impl(request, project, task, epic=None):
             'due_date': due_date,
             'created': datetime.now().strftime('%Y-%m-%d')
         }
+        if status_requires_reason(status, 'subtask') and pending_reason:
+            metadata['pending_reason'] = pending_reason
         if labels:
             metadata['labels'] = labels
 
@@ -2543,7 +2618,8 @@ def _new_subtask_impl(request, project, task, epic=None):
         'epic': epic,
         'epic_title': epic_title,
         'task': task,
-        'task_title': task_title
+        'task_title': task_title,
+        'all_statuses': get_status_for_entity_type('subtask')
     })
 
 
@@ -2710,9 +2786,19 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
         if quick_update == 'status':
             old_status = metadata.get('status', 'todo')
             new_status = request.POST.get('status', old_status)
-            if old_status != new_status:
+            new_reason = request.POST.get('pending_reason', '').strip()
+            old_reason = metadata.get('pending_reason', '')
+            status_changed = old_status != new_status
+            reason_changed = old_reason != new_reason
+            if status_requires_reason(new_status, 'subtask'):
+                metadata['pending_reason'] = new_reason
+            else:
+                metadata.pop('pending_reason', None)
+                new_reason = ''
+            if status_changed:
                 metadata['status'] = new_status
                 add_activity_entry(metadata, 'status_changed', old_status, new_status)
+            if status_changed or reason_changed:
                 save_subtask(project, task, subtask, metadata, content, epic_id=epic)
             return get_subtask_redirect_url()
         elif quick_update == 'priority':
@@ -2868,7 +2954,11 @@ def _subtask_detail_impl(request, project, task, subtask, epic=None):
     if request.method == 'POST' and 'title' in request.POST:
         # Handle form submission for editing
         metadata['title'] = request.POST.get('title', metadata['title'])
-        metadata['status'] = request.POST.get('status', metadata['status'])
+        old_status = metadata.get('status', 'todo')
+        new_status = request.POST.get('status', old_status)
+        if old_status != new_status:
+            add_activity_entry(metadata, 'status_changed', old_status, new_status)
+        metadata['status'] = new_status
         metadata['due_date'] = request.POST.get('due_date', metadata.get('due_date', ''))
         priority = request.POST.get('priority', '').strip()
         if priority:
@@ -3905,11 +3995,15 @@ def bulk_update_items(request):
             return JsonResponse({'error': 'No items selected'}, status=400)
         
         status = request.POST.get('status', '').strip()
+        pending_reason = request.POST.get('pending_reason', '').strip()
         priority = request.POST.get('priority', '').strip()
         due_date = request.POST.get('due_date', '').strip()
         
         if not (status or priority or due_date):
             return JsonResponse({'error': 'No actions specified'}, status=400)
+        
+        if status_requires_reason(status) and not pending_reason:
+            return JsonResponse({'error': 'Pending reason is required for selected status'}, status=400)
         
         # Parse items data
         items_data = []
@@ -3927,7 +4021,7 @@ def bulk_update_items(request):
         # Build actions array
         actions = []
         if status:
-            actions.append({'type': 'status', 'value': status})
+            actions.append({'type': 'status', 'value': status, 'pending_reason': pending_reason})
         if priority:
             actions.append({'type': 'priority', 'value': priority})
         if due_date:
@@ -3943,6 +4037,10 @@ def bulk_update_items(request):
         
         if action_type == 'status' and action_value not in valid_statuses:
             return JsonResponse({'error': f'Invalid status: {action_value}'}, status=400)
+        if action_type == 'status' and status_requires_reason(action_value):
+            pending_reason = action.get('pending_reason', '').strip()
+            if not pending_reason:
+                return JsonResponse({'error': 'Pending reason is required for selected status'}, status=400)
         if action_type == 'priority' and action_value not in valid_priorities:
             return JsonResponse({'error': f'Invalid priority: {action_value}'}, status=400)
         if action_type == 'due_date' and action_value and not re.match(r'^\d{4}-\d{2}-\d{2}$', action_value):
@@ -4000,6 +4098,10 @@ def bulk_update_items(request):
                             if old_status != action_value:
                                 meta['status'] = action_value
                                 add_activity_entry(meta, 'status_changed', old_status, action_value)
+                            if status_requires_reason(action_value, 'task'):
+                                meta['pending_reason'] = action.get('pending_reason', '').strip()
+                            else:
+                                meta.pop('pending_reason', None)
                         elif action_type == 'priority':
                             old_priority = meta.get('priority', '')
                             if old_priority != action_value:
@@ -4049,6 +4151,10 @@ def bulk_update_items(request):
                             if old_status != action_value:
                                 meta['status'] = action_value
                                 add_activity_entry(meta, 'status_changed', old_status, action_value)
+                            if status_requires_reason(action_value, 'subtask'):
+                                meta['pending_reason'] = action.get('pending_reason', '').strip()
+                            else:
+                                meta.pop('pending_reason', None)
                         elif action_type == 'priority':
                             old_priority = meta.get('priority', '')
                             if old_priority != action_value:

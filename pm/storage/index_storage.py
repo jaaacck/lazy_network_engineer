@@ -146,6 +146,7 @@ class IndexStorage:
                     'priority': metadata.get('priority'),
                     'created': metadata.get('created', ''),
                     'updated': metadata.get('updated', ''),
+                    'pending_reason': metadata.get('pending_reason', ''),
                     'content': content or '',
                     'seq_id': metadata.get('seq_id', '') or None,
                     'archived': metadata.get('archived', False),

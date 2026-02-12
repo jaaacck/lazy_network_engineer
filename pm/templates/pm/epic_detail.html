@@ -37,14 +37,16 @@
     <div class="overview-row overview-main">
         <div class="overview-field">
             <span class="field-label">Status</span>
-            <form method="post" class="field-value">
+            <form method="post" class="field-value status-reason-form" data-auto-submit="true">
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
-                <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
+                <select name="status" class="badge badge-status status-{{ metadata.status }} status-reason-select">
                     {% for status in all_statuses %}
-                    <option value="{{ status.name }}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
+                    <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
                     {% endfor %}
                 </select>
+                <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." value="{{ metadata.pending_reason|default:'' }}" style="display: none; margin-left: 6px; padding: 2px 6px; font-size: 12px;">
+                <button type="submit" class="pending-reason-save" style="display: none; margin-left: 6px;">Save</button>
             </form>
         </div>
         <div class="overview-field">
@@ -264,7 +266,7 @@
 
     <div class="section">
         <div class="section-title">Tasks{% if not is_inbox_epic %} (<span id="tasks-count">{{ completed_tasks }}/{{ total_tasks }}</span>){% endif %}</div>
-        <form method="post" action="{% url 'new_task' project=project epic=epic %}" class="quick-setting-form ajax-create-form" id="new-task-form">
+        <form method="post" action="{% url 'new_task' project=project epic=epic %}" class="quick-setting-form ajax-create-form status-reason-form" id="new-task-form">
             {% csrf_token %}
             <label for="quick_task_title">Task</label>
             <input type="text" name="title" id="quick_task_title" placeholder="Task title" required>
@@ -277,11 +279,12 @@
                 <option value="4">P4</option>
                 <option value="5">P5</option>
             </select>
-            <select name="status">
+            <select name="status" class="status-reason-select">
                 {% for status in all_statuses %}
-                <option value="{{ status.name }}">{{ status.display_name }}</option>
+                <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}">{{ status.display_name }}</option>
                 {% endfor %}
             </select>
+            <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." style="display: none; padding: 4px 6px; font-size: 12px;">
             {% endif %}
             <button type="submit">Create</button>
         </form>
@@ -300,6 +303,7 @@
                 <option value="{{ status.name }}">{{ status.display_name }}</option>
                 {% endfor %}
             </select>
+            <input type="text" id="bulk-pending-reason" placeholder="Reason..." style="display: none; padding: 4px 6px; font-size: 12px;">
             <select id="bulk-priority">
                 <option value="">Set Priority...</option>
                 <option value="">None</option>
@@ -488,9 +492,14 @@
         var actions = [];
         var status = document.getElementById('bulk-status').value;
         var priority = document.getElementById('bulk-priority').value;
+        var pendingReason = document.getElementById('bulk-pending-reason').value.trim();
         
         if (status) {
-            actions.push({type: 'status', value: status});
+            if ((status === 'on_hold' || status === 'blocked') && !pendingReason) {
+                alert('Please provide a reason for On Hold/Blocked');
+                return;
+            }
+            actions.push({type: 'status', value: status, pending_reason: pendingReason});
         }
         if (priority !== '') {
             actions.push({type: 'priority', value: priority});
@@ -524,6 +533,16 @@
             });
     });
     
+    // Toggle pending reason input based on status
+    document.getElementById('bulk-status').addEventListener('change', function() {
+        var needsReason = this.value === 'on_hold' || this.value === 'blocked';
+        var reasonInput = document.getElementById('bulk-pending-reason');
+        reasonInput.style.display = needsReason ? 'inline-block' : 'none';
+        if (!needsReason) {
+            reasonInput.value = '';
+        }
+    });
+
     // Bulk delete
     document.getElementById('bulk-delete').addEventListener('click', function() {
         var ids = getSelectedIds();

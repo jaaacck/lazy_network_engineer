@@ -10,14 +10,16 @@
     <span>{{ metadata.title }}</span>
     <div style="display: flex; align-items: center; gap: 10px;">
         <div class="badge-group">
-            <form method="post" class="field-value">
+            <form method="post" class="field-value status-reason-form" data-auto-submit="true">
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
-                <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
+                <select name="status" class="badge badge-status status-{{ metadata.status }} status-reason-select">
                     {% for status in all_statuses %}
-                    <option value="{{ status.name }}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
+                    <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
                     {% endfor %}
                 </select>
+                <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." value="{{ metadata.pending_reason|default:'' }}" style="display: none; margin-left: 6px; padding: 2px 6px; font-size: 12px;">
+                <button type="submit" class="pending-reason-save" style="display: none; margin-left: 6px;">Save</button>
             </form>
         </div>
         <div class="mode-toggle">
@@ -81,7 +83,7 @@
     <!-- All Epics -->
     <div class="section">
         <div class="section-title">Epics</div>
-        <form method="post" action="{% url 'new_epic' project=project %}" class="quick-setting-form ajax-create-form" id="new-epic-form">
+        <form method="post" action="{% url 'new_epic' project=project %}" class="quick-setting-form ajax-create-form status-reason-form" id="new-epic-form">
             {% csrf_token %}
             <input type="text" name="title" id="quick_epic_title" placeholder="New epic title..." required>
             <select name="priority">
@@ -92,11 +94,12 @@
                 <option value="4">P4</option>
                 <option value="5">P5</option>
             </select>
-            <select name="status">
-                <option value="active">active</option>
-                <option value="completed">completed</option>
-                <option value="canceled">canceled</option>
+            <select name="status" class="status-reason-select">
+                {% for status in epic_statuses %}
+                <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
+            <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." style="display: none; padding: 4px 6px; font-size: 12px;">
             <button type="submit">Create</button>
         </form>
         <table id="epics-table"{% if not epics %} style="display: none;"{% endif %}>
@@ -130,7 +133,7 @@
     <!-- Tasks (without epic) -->
     <div class="section">
         <div class="section-title">Tasks</div>
-        <form method="post" action="{% url 'new_task_no_epic' project=project %}" class="quick-setting-form ajax-create-form" id="new-direct-task-form">
+        <form method="post" action="{% url 'new_task_no_epic' project=project %}" class="quick-setting-form ajax-create-form status-reason-form" id="new-direct-task-form">
             {% csrf_token %}
             <input type="text" name="title" id="quick_direct_task_title" placeholder="New task title..." required>
             <select name="priority">
@@ -141,15 +144,12 @@
                 <option value="4">P4</option>
                 <option value="5">P5</option>
             </select>
-            <select name="status">
-                <option value="todo">Todo</option>
-                <option value="in_progress">In Progress</option>
-                <option value="done">Done</option>
-                <option value="on_hold">On Hold</option>
-                <option value="blocked">Blocked</option>
-                <option value="cancelled">Cancelled</option>
-                <option value="next">Next</option>
+            <select name="status" class="status-reason-select">
+                {% for status in task_statuses %}
+                <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
+            <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." style="display: none; padding: 4px 6px; font-size: 12px;">
             <button type="submit">Create</button>
         </form>
         <table id="direct-tasks-table"{% if not direct_tasks %} style="display: none;"{% endif %} class="sortable-table">

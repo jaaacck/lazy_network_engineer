@@ -15,6 +15,7 @@ class Status(models.Model):
     entity_types = models.CharField(max_length=200)  # Comma-separated: 'task,subtask'
     color = models.CharField(max_length=7, blank=True)  # Hex color for UI
     order = models.IntegerField(default=0)  # Display ordering
+    pending_reason = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
     
@@ -104,6 +105,7 @@ class BaseEntity(models.Model):
     priority = models.IntegerField(null=True, blank=True)
     created = models.CharField(max_length=50, blank=True)
     updated = models.CharField(max_length=50, blank=True)
+    pending_reason = models.TextField(blank=True)
     
     # Scheduling fields
     due_date_dt = models.DateField(null=True, blank=True)

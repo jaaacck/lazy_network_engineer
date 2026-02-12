@@ -18,13 +18,14 @@
             <input type="text" name="title" id="title" required autofocus>
         </div>
 
-        <div class="form-group">
+        <div class="form-group status-reason-form">
             <label for="status">Status</label>
-            <select name="status" id="status">
-                <option value="active">active</option>
-                <option value="completed">completed</option>
-                <option value="canceled">canceled</option>
+            <select name="status" id="status" class="status-reason-select">
+                {% for status in all_statuses %}
+                <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}">{{ status.display_name }}</option>
+                {% endfor %}
             </select>
+            <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." style="display: none; margin-top: 6px;">
         </div>
 
         <div class="form-group">

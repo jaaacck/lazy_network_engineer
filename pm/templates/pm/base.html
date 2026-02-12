@@ -83,7 +83,7 @@
                 </form>
                 
                 <!-- Task Form -->
-                <form id="quick-add-task-form" class="quick-add-form" style="display: block;">
+                <form id="quick-add-task-form" class="quick-add-form status-reason-form" style="display: block;">
                     <div class="form-group">
                         <label for="quick-task-title">Title</label>
                         <input type="text" name="title" id="quick-task-title" placeholder="Task title" required>
@@ -106,15 +106,12 @@
                     </div>
                     <div class="form-group">
                         <label for="quick-task-status">Status</label>
-                        <select name="status" id="quick-task-status">
-                            <option value="todo" selected>Todo</option>
-                            <option value="in_progress">In Progress</option>
-                            <option value="done">Done</option>
-                            <option value="on_hold">On Hold</option>
-                            <option value="blocked">Blocked</option>
-                            <option value="cancelled">Cancelled</option>
-                            <option value="next">Next</option>
+                        <select name="status" id="quick-task-status" class="status-reason-select">
+                            {% for status in task_statuses %}
+                            <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}"{% if status.name == 'todo' %} selected{% endif %}>{{ status.display_name }}</option>
+                            {% endfor %}
                         </select>
+                        <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." style="display: none; margin-top: 6px;">
                     </div>
                     <div class="form-group">
                         <label for="quick-task-due">Due Date</label>
@@ -1692,6 +1689,54 @@
                 originalDestroy.call(this);
             };
         }
+    </script>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var forms = document.querySelectorAll('.status-reason-form');
+        
+        forms.forEach(function(form) {
+            var select = form.querySelector('.status-reason-select');
+            var reason = form.querySelector('.pending-reason-input');
+            var saveBtn = form.querySelector('.pending-reason-save');
+            if (!select || !reason) return;
+            
+            function requiresReason() {
+                var selected = select.options[select.selectedIndex];
+                return selected && selected.dataset && selected.dataset.requiresReason === '1';
+            }
+
+            function toggle() {
+                var show = requiresReason();
+                var hasReason = reason.value.trim().length > 0;
+                // Show input if status requires reason OR if there's already a saved reason
+                var shouldShow = show || hasReason;
+                reason.style.display = shouldShow ? 'inline-block' : 'none';
+                reason.required = show;
+                if (saveBtn) {
+                    saveBtn.style.display = shouldShow ? 'inline-block' : 'none';
+                }
+                // Only clear the value if switching to a status that doesn't require reason (and no saved reason)
+                if (!show && !hasReason) {
+                    reason.value = '';
+                }
+            }
+            
+            select.addEventListener('change', function() {
+                var show = requiresReason();
+                // Clear reason value only if switching to a status that doesn't require reason
+                if (!show) {
+                    reason.value = '';
+                }
+                toggle();
+                if (!show && form.dataset.autoSubmit === 'true') {
+                    form.submit();
+                }
+            });
+            
+            toggle();
+        });
+    });
     </script>
 
     {% block scripts %}{% endblock %}

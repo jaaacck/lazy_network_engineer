@@ -26,14 +26,16 @@
     <div class="overview-row overview-main">
         <div class="overview-field">
             <span class="field-label">Status</span>
-            <form method="post" class="field-value">
+            <form method="post" class="field-value status-reason-form" data-auto-submit="true">
                 {% csrf_token %}
                 <input type="hidden" name="quick_update" value="status">
-                <select name="status" class="badge badge-status status-{{ metadata.status }}" onchange="this.form.submit()">
+                <select name="status" class="badge badge-status status-{{ metadata.status }} status-reason-select">
                     {% for status in all_statuses %}
-                    <option value="{{ status.name }}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
+                    <option value="{{ status.name }}" data-requires-reason="{% if status.pending_reason %}1{% else %}0{% endif %}" {% if metadata.status == status.name %}selected{% endif %}>{{ status.display_name }}</option>
                     {% endfor %}
                 </select>
+                <input type="text" name="pending_reason" class="pending-reason-input" placeholder="Reason..." value="{{ metadata.pending_reason|default:'' }}" style="display: none; margin-left: 6px; padding: 2px 6px; font-size: 12px;">
+                <button type="submit" class="pending-reason-save" style="display: none; margin-left: 6px;">Save</button>
             </form>
         </div>
         <div class="overview-field">
