@@ -280,7 +280,7 @@ class IndexStorage:
                 self._sync_entity_labels(entity, labels or [])
                 
                 # Update search index
-                self._update_search_index(entity_id, metadata.get('title', ''), content or '', 
+                self._update_search_index(entity_id, entity_type, metadata.get('title', ''), content or '', 
                                         updates_text, people_tags or [], labels or [])
                 
                 # Note: Relationships are now handled by Django ForeignKeys in the specialized models
@@ -288,12 +288,10 @@ class IndexStorage:
                 
                 # Update updates table
                 self._sync_updates(entity_id, metadata.get('updates', []))
-                
         except Exception as e:
-            logger.error(f"Error syncing entity {entity_id} to index: {e}")
+            logger.error(f"Error syncing entity {entity_id}: {e}")
             raise
-    
-    def _update_search_index(self, entity_id, title, content, updates_text, people_tags, labels):
+    def _update_search_index(self, entity_id, entity_type, title, content, updates_text, people_tags, labels):
         """Update FTS5 search index."""
         with connection.cursor() as cursor:
             # Delete existing entry
@@ -304,9 +302,9 @@ class IndexStorage:
             labels_str = ' '.join(labels) if labels else ''
             
             cursor.execute("""
-                INSERT INTO search_index (entity_id, title, content, updates, people, labels)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, [entity_id, title, content[:10000], updates_text[:10000], people_str, labels_str])
+                INSERT INTO search_index (entity_id, entity_type, title, content, updates, people, labels)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, [entity_id, entity_type, title, content[:10000], updates_text[:10000], people_str, labels_str])
     
     
     def _sync_entity_persons(self, entity, people_tags):
@@ -463,19 +461,29 @@ class IndexStorage:
     def search(self, query):
         """Full-text search using FTS5."""
         results = []
-        # Format query for FTS5 - wrap in quotes for phrase search, or use OR for multiple terms
+        # Format query for FTS5 - use flexible matching
         fts_query = query.replace('"', '""')  # Escape quotes
         if ' ' in fts_query:
             # Multiple words - search for any of them
             terms = fts_query.split()
-            fts_query = ' OR '.join([f'"{term}"' for term in terms])
+            fts_query = ' OR '.join([term + '*' for term in terms])
         else:
-            fts_query = f'"{fts_query}"'
+            # Single term - use prefix matching for more flexible results
+            fts_query = fts_query + '*'
         
         try:
             with connection.cursor() as cursor:
+                # Use snippet() to get matched text with context
+                # snippet(table, col_idx, start_mark, end_mark, ellipsis, max_tokens)
+                # Column indices: 2=title, 3=content, 4=updates, 5=people, 6=labels
                 cursor.execute("""
-                    SELECT entity_id, title, content, updates, people, labels
+                    SELECT 
+                        entity_id,
+                        snippet(search_index, 2, '[MATCH]', '[/MATCH]', '...', 15) as title_snippet,
+                        snippet(search_index, 3, '[MATCH]', '[/MATCH]', '...', 15) as content_snippet,
+                        snippet(search_index, 4, '[MATCH]', '[/MATCH]', '...', 15) as updates_snippet,
+                        snippet(search_index, 5, '[MATCH]', '[/MATCH]', '...', 10) as people_snippet,
+                        snippet(search_index, 6, '[MATCH]', '[/MATCH]', '...', 10) as labels_snippet
                     FROM search_index
                     WHERE search_index MATCH %s
                     ORDER BY rank
@@ -488,11 +496,11 @@ class IndexStorage:
                     if entity_obj:
                         results.append({
                             'entity': entity_obj,
-                            'title_match': row[1] or '',
-                            'content_match': row[2] or '',
-                            'updates_match': row[3] or '',
-                            'people_match': row[4] or '',
-                            'labels_match': row[5] or '',
+                            'title_snippet': row[1] or '',
+                            'content_snippet': row[2] or '',
+                            'updates_snippet': row[3] or '',
+                            'people_snippet': row[4] or '',
+                            'labels_snippet': row[5] or '',
                         })
         except Exception as e:
             logger.error(f"FTS5 search error: {e}")

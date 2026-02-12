@@ -4407,25 +4407,25 @@ def search_view(request):
         # Try SQLite FTS5 search first (faster)
         use_fts5 = True
         try:
-            from .storage import IndexStorage
+            from .storage.index_storage import IndexStorage
             index_storage = IndexStorage()
             fts_results = index_storage.search(query)
             
             if fts_results:
                 for result in fts_results:
                     entity = result['entity']
-                    key = (entity.type, entity.id)
+                    key = (entity._meta.model_name, entity.id)
                     if key in seen:
                         continue
                     seen.add(key)
                     
                     # Determine URL based on type
-                    if entity.type == 'project':
+                    if entity._meta.model_name == 'project':
                         url = reverse('project_detail', kwargs={'project': entity.id})
-                    elif entity.type == 'epic':
+                    elif entity._meta.model_name == 'epic':
                         url = reverse('epic_detail', kwargs={'project': entity.project_id, 'epic': entity.id})
-                    elif entity.type == 'task':
-                        if entity.epic_id:
+                    elif entity._meta.model_name == 'task':
+                        if getattr(entity, 'epic_id', None):
                             url = reverse('task_detail', kwargs={
                                 'project': entity.project_id, 
                                 'epic': entity.epic_id, 
@@ -4436,8 +4436,8 @@ def search_view(request):
                                 'project': entity.project_id,
                                 'task': entity.id
                             })
-                    elif entity.type == 'subtask':
-                        if entity.epic_id:
+                    elif entity._meta.model_name == 'subtask':
+                        if getattr(entity, 'epic_id', None):
                             url = reverse('subtask_detail', kwargs={
                                 'project': entity.project_id,
                                 'epic': entity.epic_id,
@@ -4450,33 +4450,49 @@ def search_view(request):
                                 'task': entity.task_id,
                                 'subtask': entity.id
                             })
-                    elif entity.type == 'note':
+                    elif entity._meta.model_name == 'note':
                         url = reverse('note_detail', kwargs={'note_id': entity.id})
                     else:
                         continue
                     
-                    # Determine snippet from match
+                    # Get snippet from FTS5 snippet() function results
+                    # Check each field in priority order and use first match found
                     snippet = ''
-                    if result.get('title_match'):
-                        snippet = f"Title: {result['title_match']}"
-                    elif result.get('content_match'):
-                        snippet = get_match_snippet(result['content_match'], query)
-                    elif result.get('updates_match'):
-                        snippet = get_match_snippet(result['updates_match'], query)
-                    elif result.get('people_match'):
-                        snippet = f"People: {result['people_match']}"
-                    elif result.get('labels_match'):
-                        snippet = f"Labels: {result['labels_match']}"
+                    
+                    # Check content first (most relevant)
+                    content_snip = result.get('content_snippet', '')
+                    if content_snip and '[MATCH]' in content_snip:
+                        snippet = content_snip.replace('[MATCH]', '').replace('[/MATCH]', '')
+                    
+                    # Check updates if no content match
+                    elif result.get('updates_snippet', '') and '[MATCH]' in result.get('updates_snippet', ''):
+                        updates_snip = result['updates_snippet']
+                        snippet = 'Update: ' + updates_snip.replace('[MATCH]', '').replace('[/MATCH]', '')
+                    
+                    # Check title if no content or updates match
+                    elif result.get('title_snippet', '') and '[MATCH]' in result.get('title_snippet', ''):
+                        # Don't show title snippet as it's redundant with the title display
+                        snippet = 'Match in title'
+                    
+                    # Check people tags
+                    elif result.get('people_snippet', '') and '[MATCH]' in result.get('people_snippet', ''):
+                        people_snip = result['people_snippet']
+                        snippet = 'Person: ' + people_snip.replace('[MATCH]', '').replace('[/MATCH]', '')
+                    
+                    # Check labels
+                    elif result.get('labels_snippet', '') and '[MATCH]' in result.get('labels_snippet', ''):
+                        labels_snip = result['labels_snippet']
+                        snippet = 'Label: ' + labels_snip.replace('[MATCH]', '').replace('[/MATCH]', '')
                     
                     # Get seq_id from entity
-                    seq_id = entity.seq_id or ''
+                    seq_id = getattr(entity, 'seq_id', '') or ''
                     
                     results.append({
-                        'type': entity.type,
+                        'type': entity._meta.model_name,
                         'title': entity.title,
                         'url': url,
                         'seq_id': seq_id,
-                        'snippet': highlight_snippet(snippet, query)
+                        'snippet': mark_safe(snippet.strip())  # Already safe, no user input
                     })
         except Exception as e:
             logger.error(f"FTS5 search failed: {e}")
@@ -5347,9 +5363,12 @@ def delete_note(request, note_id):
         # Basic validation
         if not note_id or '/' in note_id or '..' in note_id:
             raise Http404("Invalid note ID")
-        # Delete note from database
+        # Delete note from database and search index
         try:
             note = Note.objects.get(id=note_id)
+            # Remove from search index first
+            index_storage.delete_entity(note_id)
+            # Then delete from database (this also cascades to EntityPersonLink, EntityLabelLink)
             note.delete()
         except Note.DoesNotExist:
             pass

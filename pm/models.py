@@ -279,10 +279,7 @@ def init_search_index():
         cursor.execute("""
             CREATE VIRTUAL TABLE search_index USING fts5(
                 entity_id UNINDEXED,
-                title,
-                content,
-                updates,
-                people,
+            entity_type UNINDEXED,
                 labels
             )
         """)
@@ -293,4 +290,125 @@ def ensure_index_tables():
     init_search_index()
     # Note: relationships table was deprecated and dropped in migration 0015
     # Relationships are now handled by Django ForeignKeys in specialized models
+
+
+# =============================================================================
+# Django Signals for Automatic Search Index Updates
+# =============================================================================
+
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _get_entity_data_for_indexing(instance):
+    """Extract search-indexable data from an entity instance.
+    
+    Returns tuple: (metadata_dict, content_str, updates_text, people_tags, labels)
+    """
+    # Import here to avoid circular dependency
+    from pm.views import _build_metadata_from_entity, _merge_people_from_entityperson
+    
+    try:
+        # Build metadata from entity
+        metadata = _build_metadata_from_entity(instance)
+        metadata = _merge_people_from_entityperson(instance, metadata)
+        
+        # Get content
+        content = instance.content if hasattr(instance, 'content') else ''
+        
+        # Get updates from Update table
+        updates = Update.objects.filter(entity_id=instance.id).values_list('content', flat=True)
+        updates_text = ' '.join(updates)
+        
+        # Get people tags from EntityPersonLink
+        from django.contrib.contenttypes.models import ContentType
+        content_type = ContentType.objects.get_for_model(instance)
+        person_links = EntityPersonLink.objects.filter(
+            content_type=content_type,
+            object_id=instance.id
+        ).select_related('person')
+        people_tags = [link.person.name for link in person_links]
+        
+        # Get labels from EntityLabelLink
+        label_links = EntityLabelLink.objects.filter(
+            content_type=content_type,
+            object_id=instance.id
+        ).select_related('label')
+        labels = [link.label.name for link in label_links]
+        
+        return metadata, content, updates_text, people_tags, labels
+    except Exception as e:
+        logger.error(f"Error extracting entity data for indexing: {e}")
+        return None, None, '', [], []
+
+
+@receiver(post_save, sender=Project)
+@receiver(post_save, sender=Epic)
+@receiver(post_save, sender=Task)
+@receiver(post_save, sender=Subtask)
+@receiver(post_save, sender=Note)
+def auto_update_search_index(sender, instance, created, **kwargs):
+    """Automatically update search index when entities are saved.
+    
+    This acts as a safety net to ensure search index stays in sync even if
+    save_* functions in views.py are bypassed (e.g., bulk operations, admin edits).
+    """
+    # Skip if this is a raw save (e.g., from loaddata)
+    if kwargs.get('raw', False):
+        return
+    
+    # Determine entity type from model name
+    entity_type = sender.__name__.lower()
+    
+    try:
+        # Get indexable data
+        metadata, content, updates_text, people_tags, labels = _get_entity_data_for_indexing(instance)
+        
+        if metadata is None:
+            logger.warning(f"Could not extract metadata for {entity_type} {instance.id}, skipping search index update")
+            return
+        
+        # Update search index
+        from pm.storage.index_storage import IndexStorage
+        index_storage = IndexStorage()
+        index_storage._update_search_index(
+            entity_id=instance.id,
+            entity_type=entity_type,
+            title=instance.title or '',
+            content=content or '',
+            updates_text=updates_text,
+            people_tags=people_tags,
+            labels=labels
+        )
+        
+        logger.debug(f"Auto-updated search index for {entity_type} {instance.id}")
+    except Exception as e:
+        logger.error(f"Failed to auto-update search index for {entity_type} {instance.id}: {e}")
+
+
+@receiver(post_delete, sender=Project)
+@receiver(post_delete, sender=Epic)
+@receiver(post_delete, sender=Task)
+@receiver(post_delete, sender=Subtask)
+@receiver(post_delete, sender=Note)
+def auto_cleanup_search_index(sender, instance, **kwargs):
+    """Automatically remove entities from search index when deleted.
+    
+    This ensures orphaned search entries are cleaned up even if delete operations
+    bypass the delete_entity() call.
+    """
+    entity_type = sender.__name__.lower()
+    
+    try:
+        # Remove from search index and updates table
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM search_index WHERE entity_id = %s", [instance.id])
+            cursor.execute("DELETE FROM updates WHERE entity_id = %s", [instance.id])
+        
+        logger.debug(f"Auto-cleaned search index for deleted {entity_type} {instance.id}")
+    except Exception as e:
+        logger.error(f"Failed to auto-clean search index for {entity_type} {instance.id}: {e}")
 
