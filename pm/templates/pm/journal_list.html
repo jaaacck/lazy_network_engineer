@@ -1,0 +1,261 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt; journal
+</div>
+
+<div class="page-title">
+    Work Journal
+    <span style="font-size: 13px; color: #828282; font-weight: normal;">Week of {{ start_of_week|date:"M d, Y" }}</span>
+</div>
+
+<!-- Week navigation -->
+<div class="week-navigation" style="margin: 15px 0; padding: 10px 0; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 15px;">
+    <a href="?week={{ prev_week|date:'Y-m-d' }}" style="text-decoration: none; color: #333; font-size: 13px;">&larr; Previous Week</a>
+    
+    {% if not is_current_week %}
+    <a href="{% url 'journal_list' %}" style="text-decoration: none; color: #ff6600; font-size: 13px; font-weight: 600;">Current Week</a>
+    {% else %}
+    <span style="color: #999; font-size: 13px;">Current Week</span>
+    {% endif %}
+    
+    <a href="?week={{ next_week|date:'Y-m-d' }}" style="text-decoration: none; color: #333; font-size: 13px;">Next Week &rarr;</a>
+    
+    <span style="flex: 1;"></span>
+    
+    <div style="display: flex; align-items: center; gap: 8px;">
+        <label for="week-picker" style="font-size: 13px; color: #333;">Jump to:</label>
+        <input type="date" id="week-picker" style="font-size: 12px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 3px;">
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const weekPicker = document.getElementById('week-picker');
+    
+    weekPicker.addEventListener('change', function() {
+        if (this.value) {
+            window.location.href = '?week=' + this.value;
+        }
+    });
+});
+</script>
+
+<style>
+/* Override main container for full width */
+.main { max-width: 900px !important; }
+
+/* Week grid styling */
+.week-grid { 
+    display: flex; 
+    flex-direction: column; 
+    gap: 15px; 
+    margin-top: 15px;
+}
+
+.day-card {
+    border: 1px solid #e0e0e0;
+    padding: 15px;
+    background: #fcfcfc;
+    transition: background 0.2s;
+}
+
+.day-card:hover {
+    background: #f8f8f8;
+}
+
+.day-card.today {
+    border-color: #ff6600;
+    background: #fff6ed;
+}
+
+.day-card.today:hover {
+    background: #fff3e6;
+}
+
+.day-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.day-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.day-card.today .day-title {
+    color: #ff6600;
+}
+
+.day-date {
+    font-size: 12px;
+    color: #828282;
+}
+
+.day-content {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #333;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.day-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.day-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.day-content::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 3px;
+}
+
+.day-content::-webkit-scrollbar-thumb:hover {
+    background: #999;
+}
+
+/* Markdown content styling */
+.day-content p {
+    margin: 0 0 10px 0;
+}
+
+.day-content p:last-child {
+    margin-bottom: 0;
+}
+
+.day-content h1, .day-content h2, .day-content h3, 
+.day-content h4, .day-content h5, .day-content h6 {
+    margin: 15px 0 10px 0;
+    line-height: 1.3;
+}
+
+.day-content h1:first-child, .day-content h2:first-child, 
+.day-content h3:first-child, .day-content h4:first-child,
+.day-content h5:first-child, .day-content h6:first-child {
+    margin-top: 0;
+}
+
+.day-content ul, .day-content ol {
+    margin: 10px 0;
+    padding-left: 25px;
+}
+
+.day-content li {
+    margin: 4px 0;
+}
+
+.day-content code {
+    background: #f4f4f4;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.day-content pre {
+    background: #f4f4f4;
+    padding: 10px;
+    border-radius: 3px;
+    overflow-x: auto;
+    margin: 10px 0;
+}
+
+.day-content pre code {
+    background: none;
+    padding: 0;
+}
+
+.day-content blockquote {
+    border-left: 3px solid #ddd;
+    margin: 10px 0;
+    padding-left: 15px;
+    color: #666;
+}
+
+.day-content a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.day-content a:hover {
+    text-decoration: underline;
+}
+
+.day-content .entity-link {
+    background: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #333;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.day-content .entity-link:hover {
+    background: #e0e0e0;
+    text-decoration: none;
+}
+
+.day-content.empty {
+    color: #999;
+    font-style: italic;
+}
+
+.day-meta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #999;
+}
+
+.entry-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    cursor: pointer;
+}
+
+.entry-link:hover .day-title {
+    color: #ff6600;
+}
+</style>
+
+<div class="week-grid">
+    {% for day in week_data %}
+    <div class="day-card {% if day.is_today %}today{% endif %}">
+        <a href="{% url 'journal_entry' date_str=day.date|date:'Y-m-d' %}" class="entry-link">
+            <div class="day-header">
+                <div class="day-title">
+                    {{ day.date|date:"l" }}
+                    {% if day.is_today %}<span style="font-size: 11px; color: #ff6600; margin-left: 6px;">(today)</span>{% endif %}
+                </div>
+                <div class="day-date">{{ day.date|date:"M d, Y" }}</div>
+            </div>
+        </a>
+        {% if day.has_entry %}
+        <div class="day-content">
+            {{ day.content|markdownify|safe }}
+        </div>
+        {% if day.updated %}
+        <div class="day-meta">
+            Last updated: {{ day.updated|date:"g:i A" }}
+        </div>
+        {% endif %}
+        {% else %}
+        <a href="{% url 'journal_entry' date_str=day.date|date:'Y-m-d' %}" style="text-decoration: none; color: inherit;">
+            <div class="day-content empty">
+                No entry yet. Click to add.
+            </div>
+        </a>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}

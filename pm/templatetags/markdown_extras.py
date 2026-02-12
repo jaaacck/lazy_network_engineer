@@ -17,7 +17,7 @@ ALLOWED_TAGS = [
 ]
 
 ALLOWED_ATTRIBUTES = {
-    'a': ['href', 'title'],
+    'a': ['href', 'title', 'class', 'data-entity-id'],
     'table': ['class'],
     'pre': ['class'],
     'code': ['class'],
@@ -43,6 +43,21 @@ def markdownify(value):
     if cached is not None:
         return cached
 
+    # Convert entity references to links before markdown processing
+    # Pattern: #project-abc123, #epic-xyz789, #task-def456, #subtask-ghi789
+    def link_entity(match):
+        entity_type = match.group(1)
+        entity_id = match.group(0)
+        
+        # Build URL based on entity type
+        # Since we need project context for epics/tasks/subtasks, we'll just link to search for now
+        # Or we could make these non-links and just highlight them
+        url = f'/search/?q={entity_id}'
+        return f'<a href="{url}" class="entity-link" data-entity-id="{entity_id}">{entity_id}</a>'
+    
+    # Replace entity references with HTML links
+    value = re.sub(r'#(project|epic|task|subtask)-[a-f0-9]{8}', link_entity, value)
+    
     # Convert markdown to HTML
     html = markdown.markdown(
         value,

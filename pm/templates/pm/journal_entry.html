@@ -1,0 +1,291 @@
+{% extends "pm/base.html" %}
+{% load markdown_extras %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{% url 'project_list' %}">projects</a> &gt;
+    <a href="{% url 'journal_list' %}">journal</a> &gt;
+    {{ entry_date|date:"M d, Y" }}
+</div>
+
+<div class="page-title">
+    <span>{{ entry_date|date:"l, F d, Y" }}</span>
+    <div class="mode-toggle">
+        <button id="journal-edit-btn">edit</button>
+    </div>
+</div>
+
+<!-- Week navigation -->
+<div class="week-nav" style="margin: 15px 0; padding: 10px 0; border-bottom: 1px solid #e0e0e0;">
+    <div style="display: flex; gap: 15px; font-size: 13px;">
+        {% for day in week_dates %}
+        <a href="{% url 'journal_entry' date_str=day.date|date:'Y-m-d' %}" 
+           style="text-decoration: none; padding: 4px 8px; border-radius: 3px; {% if day.is_current %}background: #ff6600; color: white;{% elif day.is_today %}border: 1px solid #ff6600; color: #ff6600;{% else %}color: #333;{% endif %}">
+            {{ day.date|date:"D" }}
+            <span style="font-size: 11px; {% if day.is_current %}color: #ffe0cc;{% else %}color: #999;{% endif %}">{{ day.date|date:"d" }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<style>
+/* Content display and editor */
+.journal-content {
+    margin: 20px 0;
+    padding: 15px;
+    background: #fcfcfc;
+    border: 1px solid #e0e0e0;
+    min-height: 300px;
+}
+
+.journal-content.empty {
+    color: #999;
+    font-style: italic;
+}
+
+#journal-display {
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+#journal-editor-container {
+    margin-top: 10px;
+}
+
+.description-actions {
+    margin-top: 10px;
+}
+
+.description-actions button {
+    padding: 5px 12px;
+    background: #ff6600;
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.description-actions button:hover {
+    background: #ff7700;
+}
+
+.description-actions button[type="button"]:last-child {
+    background: #828282;
+    margin-left: 8px;
+}
+
+.description-actions button[type="button"]:last-child:hover {
+    background: #999;
+}
+
+.meta-info {
+    font-size: 12px;
+    color: #828282;
+    margin-top: 10px;
+}
+
+/* Entity links styling */
+.entity-link {
+    background: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-decoration: none;
+    color: #333;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.entity-link:hover {
+    background: #e0e0e0;
+}
+
+.linked-entities {
+    margin-top: 20px;
+    padding: 15px;
+    background: #f9f9f9;
+    border: 1px solid #e0e0e0;
+    border-radius: 3px;
+}
+
+.linked-entities h3 {
+    font-size: 14px;
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.entity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.entity-item {
+    font-size: 13px;
+}
+
+.entity-item a {
+    text-decoration: none;
+    color: #007bff;
+}
+
+.entity-item a:hover {
+    text-decoration: underline;
+}
+
+.entity-item .entity-id {
+    font-family: monospace;
+    color: #828282;
+    font-size: 11px;
+    margin-left: 6px;
+}
+
+.help-text {
+    margin-top: 15px;
+    padding: 12px;
+    background: #fff6ed;
+    border-left: 3px solid #ff6600;
+    font-size: 12px;
+    color: #666;
+}
+
+.help-text code {
+    background: #f0f0f0;
+    padding: 2px 5px;
+    border-radius: 2px;
+    font-size: 11px;
+}
+</style>
+
+<div class="section" style="position: relative;">
+    <div class="journal-content {% if not content %}empty{% endif %}" id="journal-display">
+        {% if content %}{{ content|markdownify|safe }}{% else %}No entry for this day yet. Click 'edit' to add one.{% endif %}
+    </div>
+    
+    <div id="journal-editor-container" style="display: none;">
+        <textarea id="journal-editor">{{ content }}</textarea>
+        <div class="description-actions">
+            <button type="button" id="journal-save-btn">Save</button>
+            <button type="button" id="journal-cancel-btn">Cancel</button>
+        </div>
+        <div class="help-text" style="margin-top: 10px;">
+            <strong>💡 Tip:</strong> Reference items using their IDs: <code>#project-abc12345</code>, <code>#epic-xyz67890</code>, <code>#task-def45678</code>, <code>#subtask-ghi12345</code>. 
+            Copy IDs from item pages or search results.
+        </div>
+    </div>
+    
+    {% if updated %}
+    <div class="meta-info">
+        Last updated: {{ updated|date:"F d, Y g:i A" }}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Linked Entities Section -->
+{% if entity_details.projects or entity_details.epics or entity_details.tasks or entity_details.subtasks %}
+<div class="linked-entities">
+    <h3>Referenced Items</h3>
+    <div class="entity-list">
+        {% for project in entity_details.projects %}
+        <div class="entity-item">
+            📁 <a href="{% url 'project_detail' project=project.id %}">{{ project.title }}</a>
+            <span class="entity-id">#{{ project.id }}</span>
+        </div>
+        {% endfor %}
+        
+        {% for epic in entity_details.epics %}
+        <div class="entity-item">
+            📋 <a href="{% url 'epic_detail' project=epic.project_id epic=epic.id %}">{{ epic.title }}</a>
+            <span class="entity-id">#{{ epic.id }}</span>
+        </div>
+        {% endfor %}
+        
+        {% for task in entity_details.tasks %}
+        <div class="entity-item">
+            ✓ {% if task.epic_id %}<a href="{% url 'task_detail' project=task.project_id epic=task.epic_id task=task.id %}">{{ task.title }}</a>{% else %}<a href="{% url 'task_detail_no_epic' project=task.project_id task=task.id %}">{{ task.title }}</a>{% endif %}
+            <span class="entity-id">#{{ task.id }}</span>
+        </div>
+        {% endfor %}
+        
+        {% for subtask in entity_details.subtasks %}
+        <div class="entity-item">
+            ⋅ {% if subtask.epic_id %}<a href="{% url 'subtask_detail' project=subtask.project_id epic=subtask.epic_id task=subtask.task_id subtask=subtask.id %}">{{ subtask.title }}</a>{% else %}<a href="{% url 'subtask_detail_no_epic' project=subtask.project_id task=subtask.task_id subtask=subtask.id %}">{{ subtask.title }}</a>{% endif %}
+            <span class="entity-id">#{{ subtask.id }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Include EasyMDE for markdown editing -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let easyMDE = null;
+    const editBtn = document.getElementById('journal-edit-btn');
+    const saveBtn = document.getElementById('journal-save-btn');
+    const cancelBtn = document.getElementById('journal-cancel-btn');
+    const display = document.getElementById('journal-display');
+    const editorContainer = document.getElementById('journal-editor-container');
+    const textarea = document.getElementById('journal-editor');
+    
+    // Initialize EasyMDE
+    function initEditor() {
+        if (!easyMDE) {
+            easyMDE = new EasyMDE({
+                element: textarea,
+                spellChecker: false,
+                placeholder: "Write your journal entry... (Markdown supported)",
+                toolbar: ["bold", "italic", "heading", "|", "quote", "unordered-list", "ordered-list", "|", "link", "image", "|", "preview", "side-by-side", "fullscreen", "|", "guide"],
+                status: false,
+                minHeight: "400px",
+            });
+        }
+    }
+    
+    // Edit mode
+    editBtn.addEventListener('click', function() {
+        display.style.display = 'none';
+        editorContainer.style.display = 'block';
+        editBtn.style.display = 'none';
+        initEditor();
+        easyMDE.codemirror.focus();
+    });
+    
+    // Cancel editing
+    cancelBtn.addEventListener('click', function() {
+        display.style.display = 'block';
+        editorContainer.style.display = 'none';
+        editBtn.style.display = 'inline-block';
+        if (easyMDE) {
+            easyMDE.value(textarea.defaultValue);
+        }
+    });
+    
+    // Save entry
+    saveBtn.addEventListener('click', function() {
+        const content = easyMDE.value();
+        
+        // Send via POST
+        const formData = new FormData();
+        formData.append('content', content);
+        formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+        })
+        .then(response => {
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert('Error saving journal entry');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error saving journal entry');
+        });
+    });
+});
+</script>
+
+{% endblock %}

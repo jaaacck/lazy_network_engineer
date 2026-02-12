@@ -441,6 +441,18 @@ class IndexStorage:
             return None
 
         entity_type = row[0]
+        
+        # Handle journal entries specially (they don't have ORM models)
+        if entity_type == 'journalentry':
+            from types import SimpleNamespace
+            # Extract date from entity_id (format: journal-YYYY-MM-DD)
+            date_str = entity_id.replace('journal-', '')
+            return SimpleNamespace(
+                id=entity_id,
+                title=f"Journal - {date_str}",
+                _meta=SimpleNamespace(model_name='journalentry')
+            )
+        
         models = {
             'project': Project,
             'epic': Epic,
@@ -496,6 +508,7 @@ class IndexStorage:
                     if entity_obj:
                         results.append({
                             'entity': entity_obj,
+                            'entity_id': entity_id,
                             'title_snippet': row[1] or '',
                             'content_snippet': row[2] or '',
                             'updates_snippet': row[3] or '',

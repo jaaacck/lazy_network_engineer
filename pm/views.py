@@ -25,7 +25,8 @@ from .utils import (
 )
 from .models import (
     Status, Person, Label, Update,
-    Project, Epic, Task, Subtask, Note, EntityPersonLink, EntityLabelLink
+    Project, Epic, Task, Subtask, Note, EntityPersonLink, EntityLabelLink,
+    JournalEntry
 )
 from django.contrib.contenttypes.models import ContentType
 from .storage.index_storage import IndexStorage
@@ -4452,6 +4453,10 @@ def search_view(request):
                             })
                     elif entity._meta.model_name == 'note':
                         url = reverse('note_detail', kwargs={'note_id': entity.id})
+                    elif entity._meta.model_name == 'journalentry':
+                        # Extract date from entity_id (format: journal-YYYY-MM-DD)
+                        date_str = result['entity_id'].replace('journal-', '')
+                        url = reverse('journal_entry', kwargs={'date_str': date_str})
                     else:
                         continue
                     
@@ -6373,3 +6378,199 @@ def mac_lookup(request):
             'success': False,
             'error': f'Error looking up MAC address: {str(e)}'
         })
+
+
+# =============================================================================
+# Journal Views
+# =============================================================================
+
+def journal_list(request):
+    """Display journal entries for the current work week."""
+    today = date.today()
+    
+    # Get week parameter from query string (format: YYYY-MM-DD for Monday of week)
+    week_param = request.GET.get('week')
+    if week_param:
+        try:
+            start_of_week = datetime.strptime(week_param, '%Y-%m-%d').date()
+            # Ensure it's a Monday
+            if start_of_week.weekday() != 0:
+                start_of_week = start_of_week - timedelta(days=start_of_week.weekday())
+        except ValueError:
+            # Invalid date format, use current week
+            start_of_week = today - timedelta(days=today.weekday())
+    else:
+        # Calculate start of week (Monday)
+        start_of_week = today - timedelta(days=today.weekday())
+    
+    # Calculate navigation dates
+    prev_week = start_of_week - timedelta(days=7)
+    next_week = start_of_week + timedelta(days=7)
+    current_week_start = today - timedelta(days=today.weekday())
+    is_current_week = start_of_week == current_week_start
+    
+    # Generate list of work week dates (Monday-Friday)
+    work_week = []
+    for i in range(5):  # Mon-Fri
+        day_date = start_of_week + timedelta(days=i)
+        work_week.append(day_date)
+    
+    # Fetch journal entries for this week
+    entries = {}
+    journal_entries = JournalEntry.objects.filter(
+        date__gte=start_of_week,
+        date__lt=start_of_week + timedelta(days=5)
+    )
+    for entry in journal_entries:
+        entries[entry.date] = entry
+    
+    # Build week data with entries
+    week_data = []
+    for day_date in work_week:
+        entry = entries.get(day_date)
+        week_data.append({
+            'date': day_date,
+            'is_today': day_date == today,
+            'has_entry': entry is not None,
+            'content': entry.content if entry else '',
+            'updated': entry.updated if entry else None
+        })
+    
+    return render(request, 'pm/journal_list.html', {
+        'week_data': week_data,
+        'today': today,
+        'start_of_week': start_of_week,
+        'prev_week': prev_week,
+        'next_week': next_week,
+        'is_current_week': is_current_week
+    })
+
+
+def journal_entry(request, date_str):
+    """View and edit a specific journal entry."""
+    try:
+        entry_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        raise Http404("Invalid date format")
+    
+    if request.method == 'POST':
+        content = request.POST.get('content', '')
+        
+        # Extract entity references from content
+        linked_entities = {
+            'projects': [],
+            'epics': [],
+            'tasks': [],
+            'subtasks': []
+        }
+        
+        # Find all entity references in the format #entity-type-id
+        for match in re.finditer(r'#(project|epic|task|subtask)-([a-f0-9]{8})', content):
+            entity_type = match.group(1)
+            entity_id = match.group(0)[1:]  # Remove the # prefix
+            
+            type_key = entity_type + 's'
+            if entity_id not in linked_entities[type_key]:
+                linked_entities[type_key].append(entity_id)
+        
+        entry, created = JournalEntry.objects.update_or_create(
+            date=entry_date,
+            defaults={
+                'content': content,
+                'linked_entities': linked_entities
+            }
+        )
+        messages.success(request, f'Journal entry for {entry_date.strftime("%B %d, %Y")} saved.')
+        return redirect('journal_entry', date_str=date_str)
+    
+    # GET request - display the entry
+    try:
+        entry = JournalEntry.objects.get(date=entry_date)
+        content = entry.content
+        updated = entry.updated
+        linked_entities = entry.linked_entities or {}
+    except JournalEntry.DoesNotExist:
+        content = ''
+        updated = None
+        linked_entities = {}
+    
+    # Load entity details for linked entities
+    entity_details = {
+        'projects': [],
+        'epics': [],
+        'tasks': [],
+        'subtasks': []
+    }
+    
+    # Load projects
+    for project_id in linked_entities.get('projects', []):
+        try:
+            project = Project.objects.get(id=project_id)
+            entity_details['projects'].append({
+                'id': project_id,
+                'title': project.title or 'Untitled Project',
+                'seq_id': project.seq_id or ''
+            })
+        except Project.DoesNotExist:
+            pass
+    
+    # Load epics
+    for epic_id in linked_entities.get('epics', []):
+        try:
+            epic = Epic.objects.get(id=epic_id)
+            entity_details['epics'].append({
+                'id': epic_id,
+                'title': epic.title or 'Untitled Epic',
+                'seq_id': epic.seq_id or '',
+                'project_id': epic.project_id
+            })
+        except Epic.DoesNotExist:
+            pass
+    
+    # Load tasks
+    for task_id in linked_entities.get('tasks', []):
+        try:
+            task = Task.objects.get(id=task_id)
+            entity_details['tasks'].append({
+                'id': task_id,
+                'title': task.title or 'Untitled Task',
+                'seq_id': task.seq_id or '',
+                'project_id': task.project_id,
+                'epic_id': task.epic_id
+            })
+        except Task.DoesNotExist:
+            pass
+    
+    # Load subtasks
+    for subtask_id in linked_entities.get('subtasks', []):
+        try:
+            subtask = Subtask.objects.get(id=subtask_id)
+            entity_details['subtasks'].append({
+                'id': subtask_id,
+                'title': subtask.title or 'Untitled Subtask',
+                'seq_id': subtask.seq_id or '',
+                'project_id': subtask.project_id,
+                'epic_id': subtask.epic_id,
+                'task_id': subtask.task_id
+            })
+        except Subtask.DoesNotExist:
+            pass
+    
+    # Calculate week navigation
+    start_of_week = entry_date - timedelta(days=entry_date.weekday())
+    week_dates = []
+    for i in range(5):  # Mon-Fri
+        day_date = start_of_week + timedelta(days=i)
+        week_dates.append({
+            'date': day_date,
+            'is_current': day_date == entry_date,
+            'is_today': day_date == date.today()
+        })
+    
+    return render(request, 'pm/journal_entry.html', {
+        'entry_date': entry_date,
+        'content': content,
+        'updated': updated,
+        'week_dates': week_dates,
+        'entity_details': entity_details
+    })

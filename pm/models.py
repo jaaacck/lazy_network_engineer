@@ -214,6 +214,23 @@ class Note(BaseEntity):
         ]
 
 
+class JournalEntry(models.Model):
+    """Daily work journal entries."""
+    date = models.DateField(unique=True, db_index=True)
+    content = models.TextField(blank=True)
+    linked_entities = models.JSONField(default=dict, blank=True)  # Store referenced entity IDs
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'pm_journal_entry'
+        ordering = ['-date']
+        verbose_name_plural = 'Journal Entries'
+    
+    def __str__(self):
+        return f"Journal Entry {self.date}"
+
+
 # =============================================================================
 # Many-to-Many Relationships using GenericForeignKey
 # =============================================================================
@@ -394,6 +411,7 @@ def auto_update_search_index(sender, instance, created, **kwargs):
 @receiver(post_delete, sender=Task)
 @receiver(post_delete, sender=Subtask)
 @receiver(post_delete, sender=Note)
+@receiver(post_delete, sender=JournalEntry)
 def auto_cleanup_search_index(sender, instance, **kwargs):
     """Automatically remove entities from search index when deleted.
     
@@ -405,10 +423,50 @@ def auto_cleanup_search_index(sender, instance, **kwargs):
     try:
         # Remove from search index and updates table
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM search_index WHERE entity_id = %s", [instance.id])
-            cursor.execute("DELETE FROM updates WHERE entity_id = %s", [instance.id])
+            # For journal entries, use the synthetic entity_id format
+            if entity_type == 'journalentry':
+                entity_id = f"journal-{instance.date.strftime('%Y-%m-%d')}"
+            else:
+                entity_id = instance.id
+            
+            cursor.execute("DELETE FROM search_index WHERE entity_id = %s", [entity_id])
+            if entity_type != 'journalentry':
+                cursor.execute("DELETE FROM updates WHERE entity_id = %s", [instance.id])
         
         logger.debug(f"Auto-cleaned search index for deleted {entity_type} {instance.id}")
     except Exception as e:
         logger.error(f"Failed to auto-clean search index for {entity_type} {instance.id}: {e}")
+
+
+@receiver(post_save, sender=JournalEntry)
+def auto_update_journal_search_index(sender, instance, created, **kwargs):
+    """Automatically update search index when journal entries are saved."""
+    # Skip if this is a raw save (e.g., from loaddata)
+    if kwargs.get('raw', False):
+        return
+    
+    try:
+        # Update search index for journal entry
+        from pm.storage.index_storage import IndexStorage
+        index_storage = IndexStorage()
+        
+        # Create synthetic title from date
+        title = f"Journal - {instance.date.strftime('%B %d, %Y')}"
+        
+        # Use synthetic entity_id with date for consistency
+        entity_id = f"journal-{instance.date.strftime('%Y-%m-%d')}"
+        
+        index_storage._update_search_index(
+            entity_id=entity_id,
+            entity_type='journalentry',
+            title=title,
+            content=instance.content or '',
+            updates_text='',
+            people_tags=[],
+            labels=[]
+        )
+        
+        logger.debug(f"Auto-updated search index for journal entry {instance.date}")
+    except Exception as e:
+        logger.error(f"Failed to auto-update search index for journal entry {instance.date}: {e}")
 

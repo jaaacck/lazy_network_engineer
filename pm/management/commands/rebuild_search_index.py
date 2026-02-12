@@ -3,7 +3,7 @@ Management command to rebuild the search index from database entities.
 """
 from django.core.management.base import BaseCommand
 from django.db import connection
-from pm.models import Project, Epic, Task, Subtask, Note
+from pm.models import Project, Epic, Task, Subtask, Note, JournalEntry
 from pm.storage.index_storage import IndexStorage
 
 
@@ -157,5 +157,27 @@ class Command(BaseCommand):
                 self.stdout.write(f'  Synced note: {note.id} - {note.title}')
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'  Error syncing note {note.id}: {e}'))
+        
+        # Sync journal entries
+        journal_entries = JournalEntry.objects.all()
+        for entry in journal_entries:
+            try:
+                # Create synthetic title and entity_id
+                title = f"Journal - {entry.date.strftime('%B %d, %Y')}"
+                entity_id = f"journal-{entry.date.strftime('%Y-%m-%d')}"
+                
+                index_storage._update_search_index(
+                    entity_id,
+                    'journalentry',
+                    title,
+                    entry.content or '',
+                    '',  # no updates
+                    [],  # no people tags
+                    []   # no labels
+                )
+                total_synced += 1
+                self.stdout.write(f'  Synced journal: {entry.date} - {title}')
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f'  Error syncing journal entry {entry.date}: {e}'))
         
         self.stdout.write(self.style.SUCCESS(f'Search index rebuild complete! Synced {total_synced} entities.'))
