@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from .models import (
     Update, Status, Person, Label,
-    Project, Epic, Task, Subtask, Note,
+    Project, Epic, Task, Subtask, Note, JournalEntry,
     EntityPersonLink, EntityLabelLink
 )
 
@@ -53,6 +53,14 @@ class NoteAdmin(admin.ModelAdmin):
     list_filter = ('status_fk', 'priority', 'archived')
     search_fields = ('id', 'title', 'content')
     readonly_fields = ('id', 'created', 'updated')
+
+
+@admin.register(JournalEntry)
+class JournalEntryAdmin(admin.ModelAdmin):
+    list_display = ('date', 'updated', 'created')
+    list_filter = ('date',)
+    search_fields = ('date', 'content')
+    readonly_fields = ('created', 'updated')
 
 
 
